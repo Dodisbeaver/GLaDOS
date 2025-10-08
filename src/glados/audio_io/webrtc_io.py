@@ -16,20 +16,20 @@ from . import VAD
 class WebRTCAudioIO:
     """Audio I/O implementation using WebRTC through WebSocket proxy.
 
-    This class provides an implementation of the AudioIO interface that receives
-    audio data from a WebRTC-enabled web interface via WebSocket connections.
-    It handles real-time audio capture with voice activity detection and audio playback.
+    This class provides an implementation of the AudioIO interface that connects
+    as a client to an audio proxy server. The proxy handles WebRTC connections
+    from browsers and forwards audio data via WebSocket.
     """
 
     SAMPLE_RATE: int = 16000  # Sample rate for audio processing
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
     VAD_THRESHOLD: float = 0.8  # Threshold for VAD detection
 
-    def __init__(self, websocket_port: int = 8765, vad_threshold: float | None = None) -> None:
+    def __init__(self, proxy_url: str = "ws://audio-proxy:3000/glados", vad_threshold: float | None = None) -> None:
         """Initialize the WebRTC audio I/O.
 
         Args:
-            websocket_port: Port for WebSocket server (default: 8765)
+            proxy_url: URL of the audio proxy WebSocket endpoint (default: ws://audio-proxy:3000/glados)
             vad_threshold: Threshold for VAD detection (default: 0.8)
         """
         if vad_threshold is None:
@@ -42,33 +42,45 @@ class WebRTCAudioIO:
 
         self._vad_model = VAD()
         self._sample_queue: queue.Queue[tuple[NDArray[np.float32], bool]] = queue.Queue()
-        self._websocket_port = websocket_port
-        self._websocket_server = None
-        self._connected_clients: set[WebSocketServerProtocol] = set()
+        self._proxy_url = proxy_url
+        self._websocket = None
         self._is_playing = False
-        self._server_task = None
+        self._client_task = None
+        self._client_loop = None
         self._stop_event = threading.Event()
+        self._connected = False
 
-    async def _handle_websocket(self, websocket: WebSocketServerProtocol, path: str) -> None:
-        """Handle incoming WebSocket connections and audio data."""
-        self._connected_clients.add(websocket)
-        logger.info(f"WebRTC client connected: {websocket.remote_address}")
-
+    async def _client_handler(self) -> None:
+        """Handle WebSocket client connection to audio proxy."""
         try:
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    await self._process_websocket_message(data, websocket)
-                except json.JSONDecodeError:
-                    logger.error("Invalid JSON received from WebRTC client")
-                except Exception as e:
-                    logger.error(f"Error processing WebSocket message: {e}")
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("WebRTC client disconnected")
-        finally:
-            self._connected_clients.discard(websocket)
+            async with websockets.connect(self._proxy_url) as websocket:
+                self._websocket = websocket
+                self._connected = True
+                logger.info(f"Connected to audio proxy: {self._proxy_url}")
 
-    async def _process_websocket_message(self, data: dict[str, Any], websocket: WebSocketServerProtocol) -> None:
+                # Send ready signal
+                await websocket.send(json.dumps({
+                    "type": "glados_ready",
+                    "sample_rate": self.SAMPLE_RATE
+                }))
+
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
+                        await self._process_websocket_message(data)
+                    except json.JSONDecodeError:
+                        logger.error("Invalid JSON received from audio proxy")
+                    except Exception as e:
+                        logger.error(f"Error processing WebSocket message: {e}")
+
+        except Exception as e:
+            logger.error(f"WebSocket connection error: {e}")
+        finally:
+            self._websocket = None
+            self._connected = False
+            logger.info("Disconnected from audio proxy")
+
+    async def _process_websocket_message(self, data: dict[str, Any]) -> None:
         """Process incoming WebSocket messages from the audio proxy."""
         message_type = data.get("type")
 
@@ -85,7 +97,7 @@ class WebRTCAudioIO:
 
         elif message_type == "proxy_ready":
             # Audio proxy is ready
-            logger.info(f"Audio proxy connected with {data.get('clients_connected', 0)} clients")
+            logger.info(f"Audio proxy ready with {data.get('clients_connected', 0)} clients")
 
         elif message_type == "client_connected":
             # New WebRTC client connected via proxy
@@ -95,53 +107,45 @@ class WebRTCAudioIO:
             # WebRTC client disconnected via proxy
             logger.info(f"WebRTC client disconnected (total: {data.get('clients_total', 0)})")
 
-        elif message_type == "client_ready":
-            # Legacy client ready message
-            await websocket.send(json.dumps({
-                "type": "server_ready",
-                "sample_rate": self.SAMPLE_RATE
-            }))
-
     def start_listening(self) -> None:
-        """Start the WebSocket server for receiving audio from WebRTC clients."""
-        if self._server_task is not None:
+        """Start the WebSocket client connection to audio proxy."""
+        if self._client_task is not None:
             self.stop_listening()
 
-        async def run_server():
-            self._websocket_server = await websockets.serve(
-                self._handle_websocket,
-                "0.0.0.0",
-                self._websocket_port
-            )
-            logger.info(f"WebRTC WebSocket server started on port {self._websocket_port}")
-            await self._websocket_server.wait_closed()
-
-        # Run the server in a separate thread with dedicated event loop
-        def server_thread():
+        # Run the client in a separate thread with dedicated event loop
+        def client_thread():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            self._client_loop = loop  # Store reference for thread-safe operations
             try:
-                loop.run_until_complete(run_server())
+                loop.run_until_complete(self._client_handler())
             finally:
                 loop.close()
+                self._client_loop = None
 
-        self._server_task = threading.Thread(target=server_thread, daemon=True)
-        self._server_task.start()
+        self._client_task = threading.Thread(target=client_thread, daemon=True)
+        self._client_task.start()
 
     def stop_listening(self) -> None:
-        """Stop the WebSocket server and clean up resources."""
-        if self._websocket_server is not None:
-            # Close all connected clients
-            for client in self._connected_clients.copy():
-                asyncio.create_task(client.close())
+        """Stop the WebSocket client and clean up resources."""
+        self._stop_event.set()
 
-            # Close the server
-            self._websocket_server.close()
-            self._websocket_server = None
+        if self._websocket is not None and self._client_loop is not None:
+            # Use thread-safe approach to close client connection
+            async def close_client():
+                if self._websocket:
+                    await self._websocket.close()
 
-        if self._server_task is not None:
-            self._server_task.join(timeout=5.0)
-            self._server_task = None
+            # Schedule coroutine on the client's event loop
+            future = asyncio.run_coroutine_threadsafe(close_client(), self._client_loop)
+            try:
+                future.result(timeout=5.0)
+            except Exception as e:
+                logger.error(f"Error stopping WebSocket client: {e}")
+
+        if self._client_task is not None:
+            self._client_task.join(timeout=5.0)
+            self._client_task = None
 
     def start_speaking(self, audio_data: NDArray[np.float32], sample_rate: int | None = None, text: str = "") -> None:
         """Send audio data to WebRTC clients for playback.
@@ -170,25 +174,18 @@ class WebRTCAudioIO:
             "text": text
         }
 
-        # Send to all connected clients asynchronously
-        async def send_to_clients():
-            for client in self._connected_clients.copy():
+        # Send to audio proxy using thread-safe approach
+        if self._websocket is not None and self._client_loop is not None:
+            async def send_to_proxy():
                 try:
-                    await client.send(json.dumps(message))
+                    await self._websocket.send(json.dumps(message))
                 except Exception as e:
-                    logger.error(f"Failed to send audio to WebRTC client: {e}")
-                    self._connected_clients.discard(client)
+                    logger.error(f"Failed to send audio to proxy: {e}")
 
-        # Schedule the coroutine in the event loop if it exists
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(send_to_clients())
-            else:
-                loop.run_until_complete(send_to_clients())
-        except RuntimeError:
-            # No event loop running, skip sending
-            logger.warning("No event loop available for sending audio to WebRTC clients")
+            # Use thread-safe scheduling to the client's event loop
+            asyncio.run_coroutine_threadsafe(send_to_proxy(), self._client_loop)
+        else:
+            logger.warning("Not connected to audio proxy for sending audio")
 
     def measure_percentage_spoken(self, total_samples: int, sample_rate: int | None = None) -> tuple[bool, int]:
         """Monitor audio playback progress.
@@ -231,26 +228,20 @@ class WebRTCAudioIO:
         if self._is_playing:
             self._is_playing = False
 
-            # Send stop message to all connected clients
-            stop_message = {"type": "stop_playback"}
+            # Send stop message to audio proxy using thread-safe approach
+            if self._websocket is not None and self._client_loop is not None:
+                stop_message = {"type": "stop_playback"}
 
-            async def send_stop_to_clients():
-                for client in self._connected_clients.copy():
+                async def send_stop_to_proxy():
                     try:
-                        await client.send(json.dumps(stop_message))
+                        await self._websocket.send(json.dumps(stop_message))
                     except Exception as e:
-                        logger.error(f"Failed to send stop message to WebRTC client: {e}")
+                        logger.error(f"Failed to send stop message to proxy: {e}")
 
-            # Schedule the coroutine in the event loop if it exists
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(send_stop_to_clients())
-                else:
-                    loop.run_until_complete(send_stop_to_clients())
-            except RuntimeError:
-                # No event loop running, skip sending
-                logger.warning("No event loop available for sending stop message to WebRTC clients")
+                # Use thread-safe scheduling to the client's event loop
+                asyncio.run_coroutine_threadsafe(send_stop_to_proxy(), self._client_loop)
+            else:
+                logger.warning("Not connected to audio proxy for sending stop message")
 
     def get_sample_queue(self) -> queue.Queue[tuple[NDArray[np.float32], bool]]:
         """Get the queue containing audio samples and VAD confidence."""

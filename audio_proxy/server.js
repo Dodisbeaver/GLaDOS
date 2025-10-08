@@ -35,8 +35,16 @@ gladosWs.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
+            if (data.type === 'glados_ready') {
+                console.log(`GLaDOS ready with sample rate: ${data.sample_rate}`);
+                // Confirm connection
+                ws.send(JSON.stringify({
+                    type: 'proxy_ready',
+                    clients_connected: webrtcClients.size
+                }));
+            }
             // Forward audio playback to all WebRTC clients
-            if (data.type === 'audio_playback' || data.type === 'stop_playback') {
+            else if (data.type === 'audio_playback' || data.type === 'stop_playback') {
                 webrtcClients.forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));

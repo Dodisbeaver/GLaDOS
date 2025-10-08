@@ -59,8 +59,10 @@ def get_audio_system(backend_type: str = "sounddevice", vad_threshold: float | N
             vad_threshold=vad_threshold,
         )
     elif backend_type == "webrtc":
+        import os
         from .webrtc_io import WebRTCAudioIO
-        return WebRTCAudioIO(vad_threshold=vad_threshold)
+        proxy_url = os.getenv("GLADOS_PROXY_URL", "ws://audio-proxy:3000/glados")
+        return WebRTCAudioIO(proxy_url=proxy_url, vad_threshold=vad_threshold)
     elif backend_type == "websocket":
         raise ValueError("WebSocket audio backend is not yet implemented.")
     else:

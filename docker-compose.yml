@@ -22,10 +22,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - GLADOS_AUDIO_IO=webrtc
-      - GLADOS_WEBSOCKET_HOST=0.0.0.0
-      - GLADOS_WEBSOCKET_PORT=8765
-    ports:
-      - "8765:8765"  # WebSocket for audio proxy
+      - GLADOS_PROXY_URL=ws://audio-proxy:3000/glados
     depends_on:
       - audio-proxy
     restart: unless-stopped
