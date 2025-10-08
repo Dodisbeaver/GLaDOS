@@ -42,6 +42,7 @@ def get_audio_system(backend_type: str = "sounddevice", vad_threshold: float | N
     Parameters:
         backend_type (str): The type of audio backend to use:
             - "sounddevice": Uses the sounddevice library for local audio I/O
+            - "webrtc": WebRTC-based audio I/O via WebSocket proxy (for containers)
             - "websocket": Network-based audio I/O (not yet implemented)
         vad_threshold (float | None): Optional threshold for voice activity detection
 
@@ -57,6 +58,9 @@ def get_audio_system(backend_type: str = "sounddevice", vad_threshold: float | N
         return SoundDeviceAudioIO(
             vad_threshold=vad_threshold,
         )
+    elif backend_type == "webrtc":
+        from .webrtc_io import WebRTCAudioIO
+        return WebRTCAudioIO(vad_threshold=vad_threshold)
     elif backend_type == "websocket":
         raise ValueError("WebSocket audio backend is not yet implemented.")
     else:
