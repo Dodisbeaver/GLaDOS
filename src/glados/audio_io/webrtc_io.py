@@ -123,6 +123,9 @@ class WebRTCAudioIO:
         if self._client_task is not None:
             self.stop_listening()
 
+        # Clear the stop event for a fresh start
+        self._stop_event.clear()
+
         # Run the client in a separate thread with dedicated event loop
         def client_thread():
             loop = asyncio.new_event_loop()
