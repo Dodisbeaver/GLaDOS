@@ -8,7 +8,6 @@ import numpy as np
 import websockets
 from loguru import logger
 from numpy.typing import NDArray
-from websockets.server import WebSocketServerProtocol
 
 from . import VAD
 
@@ -54,22 +53,36 @@ class WebRTCAudioIO:
         """Handle WebSocket client connection to audio proxy."""
         while not self._stop_event.is_set():
             try:
-                async with websockets.connect(self._proxy_url) as websocket:
+                # Use websockets with explicit compression disabled
+                async with websockets.connect(
+                    self._proxy_url,
+                    compression=None,  # Completely disable compression
+                    extensions=[],     # No extensions at all
+                    max_size=2**20,    # 1MB max message size
+                    ping_interval=20,  # Heartbeat every 20s
+                    ping_timeout=10    # 10s timeout
+                ) as websocket:
                     self._websocket = websocket
                     self._connected = True
                     logger.info(f"Connected to audio proxy: {self._proxy_url}")
 
                     # Send ready signal
-                    await websocket.send(json.dumps({
+                    ready_message = json.dumps({
                         "type": "glados_ready",
                         "sample_rate": self.SAMPLE_RATE
-                    }))
+                    })
+                    logger.debug(f"Sending ready message: {ready_message}")
+                    await websocket.send(ready_message)
+
+                    # Wait for proxy acknowledgment before proceeding
+                    await asyncio.sleep(0.1)
 
                     # Keep connection alive until stop event
                     while not self._stop_event.is_set():
                         try:
                             message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                             data = json.loads(message)
+                            logger.debug(f"Received message: {data}")
                             await self._process_websocket_message(data)
                         except asyncio.TimeoutError:
                             # Check stop event periodically
@@ -83,8 +96,13 @@ class WebRTCAudioIO:
             except Exception as e:
                 logger.error(f"WebSocket connection error: {e}")
                 if not self._stop_event.is_set():
-                    logger.info("Retrying connection in 5 seconds...")
-                    await asyncio.sleep(5)
+                    # Exponential backoff to prevent rapid reconnection
+                    retry_delay = min(5.0, 1.0 * (1.5 ** getattr(self, '_retry_count', 0)))
+                    self._retry_count = getattr(self, '_retry_count', 0) + 1
+                    logger.info(f"Retrying connection in {retry_delay:.1f} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    break
             finally:
                 self._websocket = None
                 self._connected = False
@@ -173,20 +191,30 @@ class WebRTCAudioIO:
 
         self._is_playing = True
 
-        # Send audio data to all connected WebRTC clients
+        # For now, just log that we would send audio (to test connection)
+        logger.info(f"Would send audio: {len(audio_data)} samples, text: '{text}'")
+
+        # TODO: Implement proper audio streaming (chunking or base64 encoding)
+        # Large audio arrays cause WebSocket protocol errors when converted to JSON
+
+        # Send metadata only for now
         message = {
             "type": "audio_playback",
-            "samples": audio_data.tolist(),
             "sample_rate": sample_rate,
-            "text": text
+            "text": text,
+            "samples_length": len(audio_data)
         }
 
         # Send to audio proxy using thread-safe approach
-        if self._connected and self._client_loop is not None:
+        if self._connected and self._client_loop is not None and self._websocket is not None:
             async def send_to_proxy():
                 try:
                     if self._websocket is not None:
-                        await self._websocket.send(json.dumps(message))
+                        message_json = json.dumps(message)
+                        logger.debug(f"Sending audio metadata: {len(message_json)} bytes")
+                        await self._websocket.send(message_json)
+                    else:
+                        logger.warning("WebSocket is closed, cannot send audio")
                 except Exception as e:
                     logger.error(f"Failed to send audio to proxy: {e}")
 
@@ -197,7 +225,7 @@ class WebRTCAudioIO:
             except Exception as e:
                 logger.error(f"Failed to schedule audio send: {e}")
         else:
-            logger.warning("Not connected to audio proxy for sending audio")
+            logger.debug("Not connected to audio proxy for sending audio")
 
     def measure_percentage_spoken(self, total_samples: int, sample_rate: int | None = None) -> tuple[bool, int]:
         """Monitor audio playback progress.

@@ -1,43 +1,62 @@
 const express = require('express');
-const WebSocket = require('ws');
-const http = require('http');
+const uWS = require('uws');
 const cors = require('cors');
 const path = require('path');
 
 const app = express();
-const server = http.createServer(app);
 
 // Enable CORS for all routes
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// WebSocket server for GLaDOS communication
-const gladosWs = new WebSocket.Server({ server, path: '/glados' });
-
-// WebSocket server for WebRTC clients
-const clientWs = new WebSocket.Server({ server, path: '/client' });
-
 let gladosConnection = null;
 let webrtcClients = new Set();
 
+// Handle upgrade requests for WebSocket connections
+server.on('upgrade', (request, socket, body) => {
+    console.log('WebSocket upgrade request for:', request.url);
+    console.log('Handshake headers:', request.headers);
+
+    if (WebSocket.isWebSocket(request)) {
+        const ws = new WebSocket(request, socket, body);
+
+        if (request.url === '/glados') {
+            console.log('GLaDOS container connected');
+            console.log('Extensions negotiated: (none with faye-websocket)');
+            console.log('WebSocket readyState:', ws.readyState);
+            gladosConnection = ws;
+            handleGladosConnection(ws);
+        } else if (request.url === '/client') {
+            console.log('WebRTC client connected');
+            webrtcClients.add(ws);
+            handleClientConnection(ws);
+        } else {
+            ws.close();
+        }
+    }
+});
+
 // Handle GLaDOS container connections
-gladosWs.on('connection', (ws) => {
+gladosWs.on('connection', (ws, req) => {
     console.log('GLaDOS container connected');
+    console.log('Extensions negotiated:', ws.extensions);
+    console.log('WebSocket readyState:', ws.readyState);
+    console.log('Headers:', req.headers);
     gladosConnection = ws;
 
-    // Send ready signal to GLaDOS
-    ws.send(JSON.stringify({
-        type: 'proxy_ready',
-        clients_connected: webrtcClients.size
-    }));
+    // Wait for client to send ready message instead of sending immediately
 
     ws.on('message', (message) => {
         try {
+            console.log('Raw message received:', message);
+            console.log('Message type:', typeof message);
+            console.log('Message length:', message.length);
             const data = JSON.parse(message);
+            console.log('Received from GLaDOS:', data.type);
 
             if (data.type === 'glados_ready') {
                 console.log(`GLaDOS ready with sample rate: ${data.sample_rate}`);
-                // Confirm connection
+                // Send confirmation
                 ws.send(JSON.stringify({
                     type: 'proxy_ready',
                     clients_connected: webrtcClients.size
@@ -45,6 +64,7 @@ gladosWs.on('connection', (ws) => {
             }
             // Forward audio playback to all WebRTC clients
             else if (data.type === 'audio_playback' || data.type === 'stop_playback') {
+                console.log(`Forwarding ${data.type} to ${webrtcClients.size} clients`);
                 webrtcClients.forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));
@@ -53,11 +73,13 @@ gladosWs.on('connection', (ws) => {
             }
         } catch (error) {
             console.error('Error processing GLaDOS message:', error);
+            console.error('Raw message was:', message.toString());
         }
     });
 
-    ws.on('close', () => {
-        console.log('GLaDOS container disconnected');
+    ws.on('close', (code, reason) => {
+        console.log('GLaDOS container disconnected:', code, reason.toString());
+        console.log('Close event details - wasClean:', code !== 1006);
         gladosConnection = null;
     });
 
