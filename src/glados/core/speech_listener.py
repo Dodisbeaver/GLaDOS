@@ -6,6 +6,7 @@ voice activity detection, speech recognition, and wake word detection.
 """
 
 from collections import deque
+import asyncio
 import queue
 import threading
 
@@ -98,10 +99,14 @@ class SpeechListener:
         try:
             while not self.shutdown_event.is_set():  # Check event BEFORE blocking get
                 try:
-                    # Use a timeout for the queue get
-                    sample, vad_confidence = self._sample_queue.get(timeout=self.pause_time)
+                    # Check if audio_io supports sync get (for asyncio.Queue)
+                    if hasattr(self.audio_io, 'get_sample_sync'):
+                        sample, vad_confidence = self.audio_io.get_sample_sync(timeout=self.pause_time)
+                    else:
+                        # Fallback for legacy queue.Queue implementations
+                        sample, vad_confidence = self._sample_queue.get(timeout=self.pause_time)
                     self._handle_audio_sample(sample, vad_confidence)
-                except queue.Empty:
+                except (queue.Empty, asyncio.QueueEmpty):
                     # Timeout occurred, loop again to check shutdown_event
                     continue
                 except (OSError, RuntimeError) as e:  # More specific exceptions

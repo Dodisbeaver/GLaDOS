@@ -1,8 +1,7 @@
 import asyncio
 import json
-import queue
 import threading
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import numpy as np
 import websockets
@@ -40,7 +39,7 @@ class WebRTCAudioIO:
             raise ValueError("VAD threshold must be between 0 and 1")
 
         self._vad_model = VAD()
-        self._sample_queue: queue.Queue[tuple[NDArray[np.float32], bool]] = queue.Queue()
+        self._sample_queue: asyncio.Queue[tuple[NDArray[np.float32], bool]] = asyncio.Queue(maxsize=10)
         self._proxy_url = proxy_url
         self._websocket = None
         self._is_playing = False
@@ -121,8 +120,11 @@ class WebRTCAudioIO:
             vad_value = self._vad_model(np.expand_dims(audio_samples, 0))
             vad_confidence = vad_value > self.vad_threshold
 
-            # Put audio sample in queue for GLaDOS processing
-            self._sample_queue.put((audio_samples, bool(vad_confidence)))
+            # Put audio sample in queue with backpressure handling
+            try:
+                self._sample_queue.put_nowait((audio_samples, bool(vad_confidence)))
+            except asyncio.QueueFull:
+                logger.warning("Audio queue full, dropping sample to prevent backpressure")
 
         elif message_type == "proxy_ready":
             # Audio proxy is ready
@@ -286,6 +288,58 @@ class WebRTCAudioIO:
             else:
                 logger.warning("Not connected to audio proxy for sending stop message")
 
-    def get_sample_queue(self) -> queue.Queue[tuple[NDArray[np.float32], bool]]:
-        """Get the queue containing audio samples and VAD confidence."""
+    def get_sample_queue(self) -> asyncio.Queue[tuple[NDArray[np.float32], bool]]:
+        """Get the queue containing audio samples and VAD confidence.
+
+        Note: This is now an asyncio.Queue. Use async for consumption.
+        For synchronous access from threads, use get_sample_sync() instead.
+        """
         return self._sample_queue
+
+    def get_sample_sync(self, timeout: float = 1.0) -> tuple[NDArray[np.float32], bool]:
+        """Get audio sample synchronously (for thread-based consumers).
+
+        Args:
+            timeout: Timeout in seconds
+
+        Returns:
+            tuple[NDArray[np.float32], bool]: Audio samples and VAD confidence
+
+        Raises:
+            asyncio.QueueEmpty: If no sample available within timeout
+        """
+        if self._client_loop is None:
+            raise RuntimeError("Event loop not running")
+
+        # Schedule the async get on the event loop and wait for result
+        future = asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(self._sample_queue.get(), timeout=timeout),
+            self._client_loop
+        )
+        try:
+            result = future.result(timeout=timeout + 0.5)  # Extra time for scheduling
+            return result
+        except TimeoutError:
+            raise asyncio.QueueEmpty()
+
+    async def stream_audio_samples(self) -> AsyncGenerator[tuple[NDArray[np.float32], bool], None]:
+        """Async generator that yields audio samples from the queue.
+
+        Yields:
+            tuple[NDArray[np.float32], bool]: Audio samples and VAD confidence
+
+        Example:
+            async for audio_data, has_voice in webrtc_io.stream_audio_samples():
+                process_audio(audio_data, has_voice)
+        """
+        while True:
+            try:
+                audio_data, vad_confidence = await self._sample_queue.get()
+                yield audio_data, vad_confidence
+                self._sample_queue.task_done()
+            except asyncio.CancelledError:
+                logger.info("Audio streaming cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error streaming audio samples: {e}")
+                break
