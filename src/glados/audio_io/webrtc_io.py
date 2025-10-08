@@ -191,18 +191,18 @@ class WebRTCAudioIO:
 
         self._is_playing = True
 
-        # For now, just log that we would send audio (to test connection)
-        logger.info(f"Would send audio: {len(audio_data)} samples, text: '{text}'")
+        # Convert numpy array to list for JSON serialization
+        logger.info(f"Sending audio: {len(audio_data)} samples, text: '{text}'")
 
-        # TODO: Implement proper audio streaming (chunking or base64 encoding)
-        # Large audio arrays cause WebSocket protocol errors when converted to JSON
+        # Convert audio data to a list of floats for JSON transmission
+        audio_samples = audio_data.astype(np.float32).tolist()
 
-        # Send metadata only for now
+        # Send actual audio data to clients
         message = {
             "type": "audio_playback",
             "sample_rate": sample_rate,
             "text": text,
-            "samples_length": len(audio_data)
+            "samples": audio_samples
         }
 
         # Send to audio proxy using thread-safe approach
@@ -220,8 +220,7 @@ class WebRTCAudioIO:
 
             # Use thread-safe scheduling to the client's event loop
             try:
-                future = asyncio.run_coroutine_threadsafe(send_to_proxy(), self._client_loop)
-                # Don't wait for completion to avoid blocking
+                asyncio.run_coroutine_threadsafe(send_to_proxy(), self._client_loop)
             except Exception as e:
                 logger.error(f"Failed to schedule audio send: {e}")
         else:
@@ -281,8 +280,7 @@ class WebRTCAudioIO:
 
                 # Use thread-safe scheduling to the client's event loop
                 try:
-                    future = asyncio.run_coroutine_threadsafe(send_stop_to_proxy(), self._client_loop)
-                    # Don't wait for completion to avoid blocking
+                    asyncio.run_coroutine_threadsafe(send_stop_to_proxy(), self._client_loop)
                 except Exception as e:
                     logger.error(f"Failed to schedule stop message: {e}")
             else:
