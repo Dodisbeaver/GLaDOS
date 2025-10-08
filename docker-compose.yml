@@ -1,5 +1,56 @@
 services:
-  app:
+  # GLaDOS TTS API (existing service)
+  tts-api:
     build: .
     ports:
-      - '${PORT:-5050}:5050'
+      - '${TTS_PORT:-5050}:5050'
+    volumes:
+      - glados-models:/app/models
+    environment:
+      - GLADOS_MODELS_PATH=/app/models
+
+  # GLaDOS Assistant Container (NEW - fixes the plan flaws)
+  glados:
+    build:
+      context: .
+      dockerfile: Dockerfile.assistant
+      args:
+        RUNTIME: ${GLADOS_RUNTIME:-cpu}  # cpu or cuda
+    volumes:
+      - glados-models:/app/models
+      - ./configs:/app/configs:ro
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - GLADOS_AUDIO_IO=webrtc
+      - GLADOS_WEBSOCKET_HOST=0.0.0.0
+      - GLADOS_WEBSOCKET_PORT=8765
+    ports:
+      - "8765:8765"  # WebSocket for audio proxy
+    depends_on:
+      - audio-proxy
+    restart: unless-stopped
+
+  # Audio Proxy Service (NEW - WebRTC approach)
+  audio-proxy:
+    build:
+      context: ./audio_proxy
+    ports:
+      - "${PROXY_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - GLADOS_WS_URL=ws://glados:8765
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  glados-models:
+    driver: local
+
+# Network configuration
+networks:
+  default:
+    name: glados-network

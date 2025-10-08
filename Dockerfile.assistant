@@ -1,0 +1,51 @@
+# GLaDOS Assistant Container - Corrected Version
+FROM python:3.12-slim as base
+
+# Install system dependencies (no audio libs needed for WebRTC version)
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for dependency management
+RUN pip install uv
+
+WORKDIR /app
+
+# Copy dependency files first for better layer caching
+COPY pyproject.toml README.md ./
+
+# Copy source code
+COPY src/ ./src/
+COPY configs/ ./configs/
+
+# Build stage for CPU variant
+FROM base as cpu-variant
+RUN uv sync --extra cpu --no-dev
+
+# Build stage for GPU variant
+FROM base as gpu-variant
+RUN uv sync --extra cuda --no-dev
+
+# Final stage - use build arg to select variant
+ARG RUNTIME=cpu
+FROM ${RUNTIME}-variant as final
+
+# Create models directory as volume mount point
+RUN mkdir -p /app/models
+VOLUME ["/app/models"]
+
+# Create non-root user for security
+RUN useradd -m -u 1000 glados
+USER glados
+
+# Copy entrypoint script
+COPY --chown=glados:glados docker/glados-entrypoint.sh /entrypoint.sh
+
+# Environment variables
+ENV GLADOS_CONFIG_PATH=/app/configs/glados_config.yaml
+ENV GLADOS_MODELS_PATH=/app/models
+ENV GLADOS_AUDIO_IO=webrtc
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uv", "run", "glados", "start"]
