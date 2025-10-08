@@ -1,10 +1,15 @@
 # GLaDOS Assistant Container - Corrected Version
-FROM python:3.12-slim as base
+# Declare build argument at the top
+ARG RUNTIME=cpu
 
-# Install system dependencies (no audio libs needed for WebRTC version)
+FROM python:3.12-slim AS base
+
+# Install system dependencies (including PortAudio for sounddevice import)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    libportaudio2 \
+    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for dependency management
@@ -18,18 +23,18 @@ COPY pyproject.toml README.md ./
 # Copy source code
 COPY src/ ./src/
 COPY configs/ ./configs/
+COPY data/ ./data/
 
 # Build stage for CPU variant
-FROM base as cpu-variant
+FROM base AS cpu-variant
 RUN uv sync --extra cpu --no-dev
 
 # Build stage for GPU variant
-FROM base as gpu-variant
+FROM base AS gpu-variant
 RUN uv sync --extra cuda --no-dev
 
 # Final stage - use build arg to select variant
-ARG RUNTIME=cpu
-FROM ${RUNTIME}-variant as final
+FROM ${RUNTIME}-variant AS final
 
 # Create non-root user for security
 RUN useradd -m -u 1000 glados

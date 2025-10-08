@@ -9,7 +9,7 @@ services:
     environment:
       - GLADOS_MODELS_PATH=/app/models
 
-  # GLaDOS Assistant Container (NEW - fixes the plan flaws)
+  # GLaDOS Assistant Container (Python backend)
   glados:
     build:
       context: .
@@ -26,6 +26,23 @@ services:
     depends_on:
       - audio-proxy
     restart: unless-stopped
+    networks:
+      - default
+      - ollama-network
+
+  # # GLaDOS Node.js Client (WebSocket audio communication)
+  # glados-node-client:
+  #   build:
+  #     context: ./glados_node_client
+  #   environment:
+  #     - PROXY_URL=ws://audio-proxy:3000/glados
+  #     - BACKEND_URL=http://glados:5050
+  #   depends_on:
+  #     - audio-proxy
+  #     - glados
+  #   restart: unless-stopped
+  #   networks:
+  #     - default
 
   # Audio Proxy Service (NEW - WebRTC approach)
   audio-proxy:
@@ -42,6 +59,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
 volumes:
   glados-models:
@@ -51,3 +69,5 @@ volumes:
 networks:
   default:
     name: glados-network
+  ollama-network:
+    external: true
