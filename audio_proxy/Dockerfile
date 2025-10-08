@@ -1,7 +1,12 @@
 FROM node:20-slim
 
-# Install curl for health checks and git for GitHub package installation
-RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
+# Install curl for health checks, git for GitHub packages, and build tools for native modules
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
