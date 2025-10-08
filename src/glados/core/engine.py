@@ -5,6 +5,7 @@ This module provides the main orchestration classes including the Glados assista
 configuration management, and component coordination.
 """
 
+import os
 from pathlib import Path
 import queue
 import sys
@@ -111,6 +112,28 @@ class GladosConfig(BaseModel):
         config = data
         for key in key_to_config:
             config = config[key]
+
+        # Apply environment variable overrides
+        env_overrides = {
+            "GLADOS_AUDIO_IO": "audio_io",
+            "GLADOS_MODEL": "llm_model",
+            "GLADOS_VOICE": "voice",
+            "OLLAMA_BASE_URL": "completion_url",
+            "GLADOS_API_KEY": "api_key",
+            "GLADOS_INTERRUPTIBLE": "interruptible",
+            "GLADOS_ASR_ENGINE": "asr_engine",
+            "GLADOS_WAKE_WORD": "wake_word",
+            "GLADOS_ANNOUNCEMENT": "announcement"
+        }
+
+        for env_var, config_key in env_overrides.items():
+            env_value = os.getenv(env_var)
+            if env_value is not None:
+                # Handle boolean conversion for interruptible
+                if config_key == "interruptible":
+                    config[config_key] = env_value.lower() in ("true", "1", "yes", "on")
+                else:
+                    config[config_key] = env_value
 
         return cls.model_validate(config)
 

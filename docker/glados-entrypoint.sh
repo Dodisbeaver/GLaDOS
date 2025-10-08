@@ -6,7 +6,7 @@ set -e
 echo "Starting GLaDOS container..."
 
 # Check if models directory is populated
-if [ ! -f "${GLADOS_MODELS_PATH}/silero_vad.onnx" ]; then
+if [ ! -f "${GLADOS_MODELS_PATH}/ASR/silero_vad_v5.onnx" ]; then
     echo "Downloading GLaDOS models..."
     uv run glados download
     echo "Models downloaded successfully"

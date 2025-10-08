@@ -25,12 +25,18 @@ gladosWs.on('connection', (ws) => {
     console.log('GLaDOS container connected');
     gladosConnection = ws;
 
+    // Send ready signal to GLaDOS
+    ws.send(JSON.stringify({
+        type: 'proxy_ready',
+        clients_connected: webrtcClients.size
+    }));
+
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
             // Forward audio playback to all WebRTC clients
-            if (data.type === 'audio_playback') {
+            if (data.type === 'audio_playback' || data.type === 'stop_playback') {
                 webrtcClients.forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));
@@ -60,18 +66,27 @@ clientWs.on('connection', (ws) => {
     // Notify client that server is ready
     ws.send(JSON.stringify({
         type: 'server_ready',
-        sample_rate: 16000
+        sample_rate: 16000,
+        glados_connected: gladosConnection !== null
     }));
+
+    // Notify GLaDOS about new client if connected
+    if (gladosConnection && gladosConnection.readyState === WebSocket.OPEN) {
+        gladosConnection.send(JSON.stringify({
+            type: 'client_connected',
+            clients_total: webrtcClients.size
+        }));
+    }
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
-            // Forward audio data to GLaDOS container
-            if (data.type === 'audio_data' && gladosConnection) {
-                if (gladosConnection.readyState === WebSocket.OPEN) {
-                    gladosConnection.send(JSON.stringify(data));
-                }
+            // Forward audio data and client events to GLaDOS container
+            if (gladosConnection && gladosConnection.readyState === WebSocket.OPEN) {
+                gladosConnection.send(JSON.stringify(data));
+            } else {
+                console.warn('No GLaDOS connection available for client message');
             }
         } catch (error) {
             console.error('Error processing client message:', error);
@@ -81,6 +96,14 @@ clientWs.on('connection', (ws) => {
     ws.on('close', () => {
         console.log('WebRTC client disconnected');
         webrtcClients.delete(ws);
+
+        // Notify GLaDOS about client disconnect
+        if (gladosConnection && gladosConnection.readyState === WebSocket.OPEN) {
+            gladosConnection.send(JSON.stringify({
+                type: 'client_disconnected',
+                clients_total: webrtcClients.size
+            }));
+        }
     });
 
     ws.on('error', (error) => {

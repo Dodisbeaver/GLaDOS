@@ -31,12 +31,14 @@ RUN uv sync --extra cuda --no-dev
 ARG RUNTIME=cpu
 FROM ${RUNTIME}-variant as final
 
-# Create models directory as volume mount point
-RUN mkdir -p /app/models
-VOLUME ["/app/models"]
-
 # Create non-root user for security
 RUN useradd -m -u 1000 glados
+
+# Create models directory and set ownership
+RUN mkdir -p /app/models && chown -R glados:glados /app/models
+VOLUME ["/app/models"]
+
+# Switch to non-root user
 USER glados
 
 # Copy entrypoint script

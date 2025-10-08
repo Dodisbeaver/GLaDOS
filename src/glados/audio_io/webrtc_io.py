@@ -69,11 +69,11 @@ class WebRTCAudioIO:
             self._connected_clients.discard(websocket)
 
     async def _process_websocket_message(self, data: dict[str, Any], websocket: WebSocketServerProtocol) -> None:
-        """Process incoming WebSocket messages from the WebRTC client."""
+        """Process incoming WebSocket messages from the audio proxy."""
         message_type = data.get("type")
 
         if message_type == "audio_data":
-            # Receive audio data from WebRTC client
+            # Receive audio data from WebRTC client via proxy
             audio_samples = np.array(data["samples"], dtype=np.float32)
 
             # Apply VAD to the received audio
@@ -83,8 +83,20 @@ class WebRTCAudioIO:
             # Put audio sample in queue for GLaDOS processing
             self._sample_queue.put((audio_samples, bool(vad_confidence)))
 
+        elif message_type == "proxy_ready":
+            # Audio proxy is ready
+            logger.info(f"Audio proxy connected with {data.get('clients_connected', 0)} clients")
+
+        elif message_type == "client_connected":
+            # New WebRTC client connected via proxy
+            logger.info(f"WebRTC client connected (total: {data.get('clients_total', 0)})")
+
+        elif message_type == "client_disconnected":
+            # WebRTC client disconnected via proxy
+            logger.info(f"WebRTC client disconnected (total: {data.get('clients_total', 0)})")
+
         elif message_type == "client_ready":
-            # Client is ready to receive audio
+            # Legacy client ready message
             await websocket.send(json.dumps({
                 "type": "server_ready",
                 "sample_rate": self.SAMPLE_RATE
@@ -104,12 +116,14 @@ class WebRTCAudioIO:
             logger.info(f"WebRTC WebSocket server started on port {self._websocket_port}")
             await self._websocket_server.wait_closed()
 
-        # Run the server in a separate thread
-        loop = asyncio.new_event_loop()
-
+        # Run the server in a separate thread with dedicated event loop
         def server_thread():
+            loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(run_server())
+            try:
+                loop.run_until_complete(run_server())
+            finally:
+                loop.close()
 
         self._server_task = threading.Thread(target=server_thread, daemon=True)
         self._server_task.start()
@@ -157,12 +171,24 @@ class WebRTCAudioIO:
         }
 
         # Send to all connected clients asynchronously
-        for client in self._connected_clients.copy():
-            try:
-                asyncio.create_task(client.send(json.dumps(message)))
-            except Exception as e:
-                logger.error(f"Failed to send audio to WebRTC client: {e}")
-                self._connected_clients.discard(client)
+        async def send_to_clients():
+            for client in self._connected_clients.copy():
+                try:
+                    await client.send(json.dumps(message))
+                except Exception as e:
+                    logger.error(f"Failed to send audio to WebRTC client: {e}")
+                    self._connected_clients.discard(client)
+
+        # Schedule the coroutine in the event loop if it exists
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(send_to_clients())
+            else:
+                loop.run_until_complete(send_to_clients())
+        except RuntimeError:
+            # No event loop running, skip sending
+            logger.warning("No event loop available for sending audio to WebRTC clients")
 
     def measure_percentage_spoken(self, total_samples: int, sample_rate: int | None = None) -> tuple[bool, int]:
         """Monitor audio playback progress.
@@ -207,11 +233,24 @@ class WebRTCAudioIO:
 
             # Send stop message to all connected clients
             stop_message = {"type": "stop_playback"}
-            for client in self._connected_clients.copy():
-                try:
-                    asyncio.create_task(client.send(json.dumps(stop_message)))
-                except Exception as e:
-                    logger.error(f"Failed to send stop message to WebRTC client: {e}")
+
+            async def send_stop_to_clients():
+                for client in self._connected_clients.copy():
+                    try:
+                        await client.send(json.dumps(stop_message))
+                    except Exception as e:
+                        logger.error(f"Failed to send stop message to WebRTC client: {e}")
+
+            # Schedule the coroutine in the event loop if it exists
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(send_stop_to_clients())
+                else:
+                    loop.run_until_complete(send_stop_to_clients())
+            except RuntimeError:
+                # No event loop running, skip sending
+                logger.warning("No event loop available for sending stop message to WebRTC clients")
 
     def get_sample_queue(self) -> queue.Queue[tuple[NDArray[np.float32], bool]]:
         """Get the queue containing audio samples and VAD confidence."""
