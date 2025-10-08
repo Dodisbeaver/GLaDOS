@@ -1,7 +1,7 @@
-FROM node:18-alpine
+FROM node:20-slim
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Install curl for health checks and git for GitHub package installation
+RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -16,6 +16,9 @@ COPY . .
 
 # Create public directory for web interface
 RUN mkdir -p public
+
+# Fix permissions for node user
+RUN chown -R node:node /app && chmod -R 755 public
 
 # Expose port
 EXPOSE 3000
