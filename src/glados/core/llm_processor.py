@@ -104,60 +104,33 @@ class LanguageModelProcessor:
         if not chunk:
             return chunk
 
-        # Prevent buffer from growing too large (security measure)
-        if len(self._tag_buffer) > 50:
-            logger.warning("Think tag buffer too large, resetting filter state")
-            self._reset_think_filter_state()
-
         result = []
-        chunk_pos = 0
+        i = 0
 
-        # Process any buffered content first
-        if self._tag_buffer:
-            combined = self._tag_buffer + chunk
-            self._tag_buffer = ""
-        else:
-            combined = chunk
-
-        while chunk_pos < len(combined):
+        while i < len(chunk):
             if not self._inside_think_tag:
                 # Look for opening tag
-                tag_start = combined.find("<think>", chunk_pos)
+                tag_start = chunk.find("<think>", i)
                 if tag_start == -1:
                     # No opening tag found, output remaining content
-                    result.append(combined[chunk_pos:])
+                    result.append(chunk[i:])
                     break
                 else:
                     # Output content before tag
-                    result.append(combined[chunk_pos:tag_start])
+                    result.append(chunk[i:tag_start])
                     self._inside_think_tag = True
-                    chunk_pos = tag_start + 7  # len("<think>")
+                    i = tag_start + 7  # len("<think>")
             else:
                 # Look for closing tag
-                tag_end = combined.find("</think>", chunk_pos)
+                tag_end = chunk.find("</think>", i)
                 if tag_end == -1:
-                    # No closing tag found, skip remaining content
+                    # No closing tag found in this chunk, skip remaining content
+                    # It will be in a future chunk
                     break
                 else:
                     # Found closing tag, skip content inside think block
                     self._inside_think_tag = False
-                    chunk_pos = tag_end + 8  # len("</think>")
-
-        # Handle partial tags at end of chunk
-        if chunk_pos < len(combined):
-            remaining = combined[chunk_pos:]
-            if self._inside_think_tag:
-                # Inside think block, don't output anything
-                pass
-            else:
-                # Check if we have a partial opening tag
-                for i in range(1, min(7, len(remaining) + 1)):
-                    if "<think>"[:i] == remaining[-i:]:
-                        self._tag_buffer = remaining[-i:]
-                        result.append(remaining[:-i])
-                        break
-                else:
-                    result.append(remaining)
+                    i = tag_end + 8  # len("</think>")
 
         return "".join(result)
 
