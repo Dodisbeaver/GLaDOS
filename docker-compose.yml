@@ -20,7 +20,7 @@ services:
       - glados-models:/app/models
       - ./configs:/app/configs:ro
     environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/api/chat}
       - GLADOS_AUDIO_IO=webrtc
       - GLADOS_PROXY_URL=ws://audio-proxy:3000/glados
     depends_on:
@@ -30,19 +30,6 @@ services:
       - default
       - ollama-network
 
-  # # GLaDOS Node.js Client (WebSocket audio communication)
-  # glados-node-client:
-  #   build:
-  #     context: ./glados_node_client
-  #   environment:
-  #     - PROXY_URL=ws://audio-proxy:3000/glados
-  #     - BACKEND_URL=http://glados:5050
-  #   depends_on:
-  #     - audio-proxy
-  #     - glados
-  #   restart: unless-stopped
-  #   networks:
-  #     - default
 
   # Audio Proxy Service (NEW - WebRTC approach)
   audio-proxy:
