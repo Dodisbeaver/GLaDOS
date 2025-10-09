@@ -25,8 +25,9 @@ RUN mkdir -p public
 # Fix permissions for node user
 RUN chown -R node:node /app && chmod -R 755 public
 
-# Expose port
+# Expose ports
 EXPOSE 3000
+EXPOSE 3443
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

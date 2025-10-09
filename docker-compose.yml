@@ -37,6 +37,7 @@ services:
       context: ./audio_proxy
     ports:
       - "${PROXY_PORT:-3000}:3000"
+      - "${PROXY_HTTPS_PORT:-10306}:3443"
     environment:
       - NODE_ENV=production
       - GLADOS_WS_URL=ws://glados:8765

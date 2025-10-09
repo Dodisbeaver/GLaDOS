@@ -3,14 +3,37 @@ const path = require('path');
 const fs = require('fs');
 
 const PORT = process.env.PORT || 3000;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+
+// SSL certificate paths
+const SSL_KEY = path.join(__dirname, 'ssl', 'key.pem');
+const SSL_CERT = path.join(__dirname, 'ssl', 'cert.pem');
 
 let gladosConnection = null;
 let webrtcClients = new Set();
 
-// Create uWS app with compression completely disabled
+// Create HTTP app with compression completely disabled
 const app = uWS.App({
     compression: uWS.DISABLED,
-}).ws('/glados', {
+});
+
+// Create HTTPS app with SSL certificates
+let httpsApp;
+try {
+    const sslOptions = {
+        key_file_name: SSL_KEY,
+        cert_file_name: SSL_CERT,
+        compression: uWS.DISABLED,
+    };
+    httpsApp = uWS.SSLApp(sslOptions);
+    console.log('HTTPS app created successfully');
+} catch (error) {
+    console.warn('SSL certificates not found, HTTPS will not be available:', error.message);
+}
+
+// Function to add all routes to an app (both HTTP and HTTPS will use same logic)
+function addRoutes(wsApp) {
+    return wsApp.ws('/glados', {
     /* Options */
     compression: uWS.DISABLED,
     maxPayloadLength: 128 * 1024,  // 128KB max message size
@@ -168,6 +191,8 @@ const app = uWS.App({
     const url = req.getUrl();
     let filePath = path.join(__dirname, 'public', url === '/' ? 'index.html' : url);
 
+    console.log(`HTTP request: ${req.getMethod()} ${url}`);
+
     // Check if file exists
     if (fs.existsSync(filePath)) {
         const fileContent = fs.readFileSync(filePath);
@@ -180,17 +205,29 @@ const app = uWS.App({
 
         res.writeStatus('200 OK')
            .writeHeader('Content-Type', contentType)
+           .writeHeader('Content-Length', fileContent.length.toString())
            .writeHeader('Access-Control-Allow-Origin', '*')
            .end(fileContent);
     } else {
+        console.warn(`File not found for request: ${filePath}`);
         res.writeStatus('404 Not Found')
            .writeHeader('Access-Control-Allow-Origin', '*')
            .end('File not found');
     }
 
-}).listen(PORT, (token) => {
+});
+}
+
+// Apply routes to both HTTP and HTTPS apps
+addRoutes(app);
+if (httpsApp) {
+    addRoutes(httpsApp);
+}
+
+// Start HTTP server
+app.listen('0.0.0.0', Number(PORT), (token) => {
     if (token) {
-        console.log(`GLaDOS Audio Proxy (uWS) running on port ${PORT}`);
+        console.log(`GLaDOS Audio Proxy (HTTP) running on port ${PORT}`);
         console.log(`Web interface: http://localhost:${PORT}`);
         console.log(`GLaDOS WebSocket: ws://localhost:${PORT}/glados`);
         console.log(`Client WebSocket: ws://localhost:${PORT}/client`);
@@ -198,3 +235,17 @@ const app = uWS.App({
         console.log('Failed to listen to port ' + PORT);
     }
 });
+
+// Start HTTPS server if certificates are available
+if (httpsApp) {
+    httpsApp.listen('0.0.0.0', Number(HTTPS_PORT), (token) => {
+        if (token) {
+            console.log(`GLaDOS Audio Proxy (HTTPS) running on port ${HTTPS_PORT}`);
+            console.log(`Secure web interface: https://localhost:${HTTPS_PORT}`);
+            console.log(`Secure GLaDOS WebSocket: wss://localhost:${HTTPS_PORT}/glados`);
+            console.log(`Secure Client WebSocket: wss://localhost:${HTTPS_PORT}/client`);
+        } else {
+            console.log('Failed to listen to HTTPS port ' + HTTPS_PORT);
+        }
+    });
+}
