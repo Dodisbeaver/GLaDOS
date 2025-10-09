@@ -44,6 +44,10 @@ class LanguageModelProcessor:
         self.pause_time = pause_time
 
         self.prompt_headers = {"Content-Type": "application/json"}
+
+        # State for filtering chain-of-thought tags
+        self._inside_think_tag = False
+        self._tag_buffer = ""
         if api_key:
             self.prompt_headers["Authorization"] = f"Bearer {api_key}"
 
@@ -86,6 +90,61 @@ class LanguageModelProcessor:
             )
             return None
 
+    def _filter_think_tags(self, chunk: str) -> str:
+        """Filter out <think>...</think> tags from streaming content.
+
+        Maintains state across chunks to handle tags split across multiple chunks.
+        """
+        if not chunk:
+            return chunk
+
+        result = []
+        i = 0
+
+        while i < len(chunk):
+            # Add previous buffer to check for tag boundaries
+            check_str = self._tag_buffer + chunk[i:]
+
+            if not self._inside_think_tag:
+                # Look for opening tag
+                if check_str.startswith("<think>"):
+                    self._inside_think_tag = True
+                    # Skip the tag
+                    skip_len = len("<think>") - len(self._tag_buffer)
+                    i += skip_len
+                    self._tag_buffer = ""
+                    continue
+                # Check if we're building up to a tag
+                elif "<think>"[:len(check_str)] == check_str and len(check_str) < 7:
+                    self._tag_buffer = check_str
+                    break
+                else:
+                    # Not a tag, output the buffer and current char
+                    if self._tag_buffer:
+                        result.append(self._tag_buffer)
+                        self._tag_buffer = ""
+                    result.append(chunk[i])
+                    i += 1
+            else:
+                # Look for closing tag
+                if check_str.startswith("</think>"):
+                    self._inside_think_tag = False
+                    # Skip the tag
+                    skip_len = len("</think>") - len(self._tag_buffer)
+                    i += skip_len
+                    self._tag_buffer = ""
+                    continue
+                # Check if we're building up to a closing tag
+                elif "</think>"[:len(check_str)] == check_str and len(check_str) < 8:
+                    self._tag_buffer = check_str
+                    break
+                else:
+                    # Inside think block, skip content
+                    self._tag_buffer = ""
+                    i += 1
+
+        return "".join(result)
+
     def _process_chunk(self, line: dict[str, Any]) -> str | None:
         # Copy from Glados._process_chunk
         if not line or not isinstance(line, dict):
@@ -96,11 +155,15 @@ class LanguageModelProcessor:
                 return None
             elif "choices" in line:  # OpenAI format
                 content = line.get("choices", [{}])[0].get("delta", {}).get("content")
-                return str(content) if content else None
+                if content:
+                    return self._filter_think_tags(str(content))
+                return None
             # Handle Ollama format
             else:
                 content = line.get("message", {}).get("content")
-                return content if content else None
+                if content:
+                    return self._filter_think_tags(content)
+                return None
         except Exception as e:
             logger.error(f"LLM Processor: Error processing chunk: {e}, chunk: {line}")
             return None
@@ -142,6 +205,10 @@ class LanguageModelProcessor:
 
                 logger.info(f"LLM Processor: Received text for LLM: '{detected_text}'")
                 self.conversation_history.append({"role": "user", "content": detected_text})
+
+                # Reset think tag filter state for new request
+                self._inside_think_tag = False
+                self._tag_buffer = ""
 
                 data = {
                     "model": self.model_name,
