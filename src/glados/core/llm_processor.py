@@ -151,6 +151,7 @@ class LanguageModelProcessor:
 
                 sentence_buffer: list[str] = []
                 try:
+                    logger.debug(f"LLM Processor: Sending POST to {self.completion_url}")
                     with requests.post(
                         str(self.completion_url),
                         headers=self.prompt_headers,
