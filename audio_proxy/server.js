@@ -13,8 +13,8 @@ const app = uWS.App({
 }).ws('/glados', {
     /* Options */
     compression: uWS.DISABLED,
-    maxCompressedSize: 64 * 1024,
-    maxBackpressure: 64 * 1024,
+    maxPayloadLength: 128 * 1024,  // 128KB max message size
+    maxBackpressure: 1024 * 1024,  // 1MB backpressure buffer for chunked audio
 
     /* Handlers */
     message: (ws, message, opCode) => {
@@ -82,8 +82,8 @@ const app = uWS.App({
 }).ws('/client', {
     /* Options */
     compression: uWS.DISABLED,
-    maxCompressedSize: 64 * 1024,
-    maxBackpressure: 64 * 1024,
+    maxPayloadLength: 128 * 1024,  // 128KB max message size
+    maxBackpressure: 1024 * 1024,  // 1MB backpressure buffer for chunked audio
 
     /* Handlers */
     message: (ws, message, opCode) => {
