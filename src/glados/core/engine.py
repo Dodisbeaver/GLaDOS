@@ -78,7 +78,7 @@ class GladosConfig(BaseModel):
     wake_word: str | None
     voice: str
     announcement: str | None
-    personality_preprompt: list[PersonalityPrompt]
+    personality_preprompt: list[PersonalityPrompt] | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path, key_to_config: tuple[str, ...] = ("Glados",)) -> "GladosConfig":
@@ -139,6 +139,8 @@ class GladosConfig(BaseModel):
 
     def to_chat_messages(self) -> list[dict[str, str]]:
         """Convert personality preprompt to chat message format."""
+        if self.personality_preprompt is None:
+            return []
         return [prompt.to_chat_message() for prompt in self.personality_preprompt]
 
 
