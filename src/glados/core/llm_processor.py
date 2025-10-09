@@ -113,7 +113,8 @@ class LanguageModelProcessor:
             current_sentence_parts (list[str]): List of sentence parts to be processed.
         """
         sentence = "".join(current_sentence_parts)
-        sentence = re.sub(r"\*.*?\*|\(.*?\)", "", sentence)
+        # Remove markdown formatting, parenthetical asides, and chain-of-thought tags
+        sentence = re.sub(r"\*.*?\*|\(.*?\)|<think>.*?</think>", "", sentence, flags=re.DOTALL)
         sentence = sentence.replace("\n\n", ". ").replace("\n", ". ").replace("  ", " ").replace(":", " ")
 
         if sentence and sentence != ".":  # Avoid sending just a period
