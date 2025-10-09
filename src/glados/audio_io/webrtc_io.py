@@ -357,15 +357,22 @@ class WebRTCAudioIO:
         Raises:
             asyncio.QueueEmpty: If no sample available within timeout
         """
+        # Wait briefly for event loop to start (max 1 second)
+        import time
+        wait_start = time.time()
+        while self._client_loop is None and (time.time() - wait_start) < 1.0:
+            time.sleep(0.05)
+
         if self._client_loop is None:
-            raise RuntimeError("Event loop not running")
+            # Event loop not ready yet, return empty result to avoid blocking startup
+            raise asyncio.QueueEmpty()
 
         # Schedule the async get on the event loop and wait for result
-        future = asyncio.run_coroutine_threadsafe(
-            asyncio.wait_for(self._sample_queue.get(), timeout=timeout),
-            self._client_loop
-        )
         try:
+            future = asyncio.run_coroutine_threadsafe(
+                asyncio.wait_for(self._sample_queue.get(), timeout=timeout),
+                self._client_loop
+            )
             result = future.result(timeout=timeout + 0.5)  # Extra time for scheduling
             return result
         except TimeoutError:
