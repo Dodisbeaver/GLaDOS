@@ -309,7 +309,8 @@
 
                 // Concatenate all chunks
                 const allSamples = this.audioChunks.flat();
-                console.log(`Playing ${allSamples.length} samples (${allSamples.length / this.chunkMetadata.sample_rate:.2f}s)`);
+                const duration = (allSamples.length / this.chunkMetadata.sample_rate).toFixed(2);
+                console.log(`Playing ${allSamples.length} samples (${duration}s)`);
 
                 // Play concatenated audio
                 await this.playAudio(allSamples, this.chunkMetadata.sample_rate, this.chunkMetadata.text);
