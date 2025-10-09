@@ -188,6 +188,8 @@
                 this.processor = null;
                 this.isRecording = false;
                 this.isConnected = false;
+                this.shouldReconnect = true;
+                this.reconnectTimer = null;
 
                 // Chunked audio playback state
                 this.audioChunks = [];
@@ -203,15 +205,36 @@
 
                 this.micButton.addEventListener('click', () => this.toggleRecording());
 
+                window.addEventListener('beforeunload', () => {
+                    this.shouldReconnect = false;
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                    }
+                    if (
+                        this.websocket &&
+                        (this.websocket.readyState === WebSocket.OPEN ||
+                         this.websocket.readyState === WebSocket.CONNECTING)
+                    ) {
+                        this.websocket.close();
+                    }
+                });
+
                 this.connect();
                 this.setupVisualizer();
             }
 
             connect() {
-                const wsUrl = `ws://${window.location.hostname}:${window.location.port}/client`;
+                const wsUrl = this.getWebSocketUrl();
                 console.log('Connecting to:', wsUrl);
 
-                this.websocket = new WebSocket(wsUrl);
+                try {
+                    this.websocket = new WebSocket(wsUrl);
+                } catch (error) {
+                    console.error('Failed to create WebSocket:', error);
+                    this.updateStatus('Failed to initialize connection', true);
+                    this.scheduleReconnect();
+                    return;
+                }
 
                 this.websocket.onopen = () => {
                     console.log('Connected to audio proxy');
@@ -238,13 +261,43 @@
                     this.proxyStatus.textContent = 'Disconnected';
                     this.proxyStatus.style.color = '#ff3300';
                     this.updateStatus('Disconnected from proxy', true);
-                    setTimeout(() => this.connect(), 3000);
+                    this.scheduleReconnect();
                 };
 
                 this.websocket.onerror = (error) => {
                     console.error('WebSocket error:', error);
                     this.updateStatus('Connection error', true);
                 };
+            }
+
+            getWebSocketUrl() {
+                try {
+                    const url = new URL(window.location.href);
+                    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+                    url.pathname = '/client';
+                    url.search = '';
+                    url.hash = '';
+                    return url.toString();
+                } catch (error) {
+                    console.error('Failed to construct WebSocket URL:', error);
+                    const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    return `${fallbackProtocol}//${window.location.host}/client`;
+                }
+            }
+
+            scheduleReconnect() {
+                if (!this.shouldReconnect) {
+                    return;
+                }
+
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                }
+
+                this.reconnectTimer = setTimeout(() => {
+                    this.reconnectTimer = null;
+                    this.connect();
+                }, 3000);
             }
 
             handleMessage(data) {
@@ -406,16 +459,15 @@
 
             async playAudio(samples, sampleRate, text) {
                 try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
+                    // Always create a fresh AudioContext for playback to avoid state issues
+                    const playbackContext = new (window.AudioContext || window.webkitAudioContext)();
 
-                    const audioBuffer = this.audioContext.createBuffer(1, samples.length, sampleRate);
+                    const audioBuffer = playbackContext.createBuffer(1, samples.length, sampleRate);
                     audioBuffer.copyToChannel(new Float32Array(samples), 0);
 
-                    const source = this.audioContext.createBufferSource();
+                    const source = playbackContext.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(this.audioContext.destination);
+                    source.connect(playbackContext.destination);
                     source.start();
 
                     this.updateStatus(`GLaDOS: "${text}" (Playing response)`);
@@ -468,8 +520,8 @@
             }
         }
 
-        // Initialize the client when page loads
-        window.addEventListener('load', () => {
+        // Initialize the client once DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
             new GLaDOSWebRTCClient();
         });
     </script>
