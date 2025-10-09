@@ -22,6 +22,7 @@ class WebRTCAudioIO:
     SAMPLE_RATE: int = 16000  # Sample rate for audio processing
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
     VAD_THRESHOLD: float = 0.8  # Threshold for VAD detection
+    CHUNK_SIZE: int = 3200  # Samples per chunk (~200ms at 16kHz, ~65KB JSON)
 
     def __init__(self, proxy_url: str = "ws://audio-proxy:3000/glados", vad_threshold: float | None = None) -> None:
         """Initialize the WebRTC audio I/O.
@@ -177,6 +178,9 @@ class WebRTCAudioIO:
     def start_speaking(self, audio_data: NDArray[np.float32], sample_rate: int | None = None, text: str = "") -> None:
         """Send audio data to WebRTC clients for playback.
 
+        Audio is automatically chunked to avoid WebSocket size limits.
+        Large audio is split into ~200ms chunks for smooth streaming.
+
         Parameters:
             audio_data: The audio data to play as a numpy float32 array
             sample_rate: The sample rate of the audio data in Hz
@@ -193,36 +197,66 @@ class WebRTCAudioIO:
 
         self._is_playing = True
 
-        # Convert numpy array to list for JSON serialization
-        logger.info(f"Sending audio: {len(audio_data)} samples, text: '{text}'")
-
-        # Convert audio data to a list of floats for JSON transmission
-        audio_samples = audio_data.astype(np.float32).tolist()
-
-        # Send actual audio data to clients
-        message = {
-            "type": "audio_playback",
-            "sample_rate": sample_rate,
-            "text": text,
-            "samples": audio_samples
-        }
+        total_samples = len(audio_data)
+        logger.info(f"Sending audio: {total_samples} samples ({total_samples/sample_rate:.2f}s), text: '{text}'")
 
         # Send to audio proxy using thread-safe approach
         if self._connected and self._client_loop is not None and self._websocket is not None:
-            async def send_to_proxy():
+            async def send_chunked_audio():
                 try:
-                    if self._websocket is not None:
-                        message_json = json.dumps(message)
-                        logger.debug(f"Sending audio metadata: {len(message_json)} bytes")
-                        await self._websocket.send(message_json)
-                    else:
+                    if self._websocket is None:
                         logger.warning("WebSocket is closed, cannot send audio")
+                        return
+
+                    # Calculate number of chunks needed
+                    num_chunks = (total_samples + self.CHUNK_SIZE - 1) // self.CHUNK_SIZE
+
+                    # Send start message with metadata
+                    start_message = {
+                        "type": "audio_start",
+                        "sample_rate": sample_rate,
+                        "text": text,
+                        "total_samples": total_samples,
+                        "chunk_size": self.CHUNK_SIZE,
+                        "num_chunks": num_chunks
+                    }
+                    await self._websocket.send(json.dumps(start_message))
+                    logger.debug(f"Starting chunked audio: {num_chunks} chunks")
+
+                    # Send audio in chunks
+                    for chunk_idx in range(num_chunks):
+                        if not self._is_playing:
+                            logger.info("Playback stopped, cancelling remaining chunks")
+                            break
+
+                        start_idx = chunk_idx * self.CHUNK_SIZE
+                        end_idx = min(start_idx + self.CHUNK_SIZE, total_samples)
+                        chunk = audio_data[start_idx:end_idx]
+
+                        chunk_message = {
+                            "type": "audio_chunk",
+                            "chunk_index": chunk_idx,
+                            "samples": chunk.astype(np.float32).tolist()
+                        }
+
+                        chunk_json = json.dumps(chunk_message)
+                        await self._websocket.send(chunk_json)
+                        logger.debug(f"Sent chunk {chunk_idx + 1}/{num_chunks} ({len(chunk_json)} bytes)")
+
+                        # Small delay between chunks for flow control (~10ms)
+                        await asyncio.sleep(0.01)
+
+                    # Send end message
+                    end_message = {"type": "audio_end"}
+                    await self._websocket.send(json.dumps(end_message))
+                    logger.debug("Audio transmission complete")
+
                 except Exception as e:
-                    logger.error(f"Failed to send audio to proxy: {e}")
+                    logger.error(f"Failed to send chunked audio to proxy: {e}")
 
             # Use thread-safe scheduling to the client's event loop
             try:
-                asyncio.run_coroutine_threadsafe(send_to_proxy(), self._client_loop)
+                asyncio.run_coroutine_threadsafe(send_chunked_audio(), self._client_loop)
             except Exception as e:
                 logger.error(f"Failed to schedule audio send: {e}")
         else:

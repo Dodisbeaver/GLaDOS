@@ -189,6 +189,11 @@
                 this.isRecording = false;
                 this.isConnected = false;
 
+                // Chunked audio playback state
+                this.audioChunks = [];
+                this.chunkMetadata = null;
+                this.receivedChunks = 0;
+
                 this.micButton = document.getElementById('micButton');
                 this.statusText = document.getElementById('statusText');
                 this.proxyStatus = document.getElementById('proxy-status');
@@ -251,13 +256,68 @@
                         break;
 
                     case 'audio_playback':
+                        // Legacy single-chunk audio
                         this.playAudio(data.samples, data.sample_rate, data.text);
+                        break;
+
+                    case 'audio_start':
+                        // Start of chunked audio stream
+                        this.startChunkedAudio(data);
+                        break;
+
+                    case 'audio_chunk':
+                        // Receive audio chunk
+                        this.receiveAudioChunk(data);
+                        break;
+
+                    case 'audio_end':
+                        // End of chunked audio, play complete audio
+                        this.playChunkedAudio();
                         break;
 
                     case 'stop_playback':
                         this.stopAudio();
                         break;
                 }
+            }
+
+            startChunkedAudio(metadata) {
+                console.log(`Starting chunked audio: ${metadata.num_chunks} chunks, ${metadata.total_samples} samples`);
+                this.chunkMetadata = metadata;
+                this.audioChunks = new Array(metadata.num_chunks);
+                this.receivedChunks = 0;
+                this.updateStatus(`Receiving audio: ${metadata.text}`);
+            }
+
+            receiveAudioChunk(chunkData) {
+                if (!this.chunkMetadata) {
+                    console.error('Received chunk without metadata');
+                    return;
+                }
+
+                this.audioChunks[chunkData.chunk_index] = chunkData.samples;
+                this.receivedChunks++;
+
+                console.log(`Received chunk ${this.receivedChunks}/${this.chunkMetadata.num_chunks}`);
+            }
+
+            async playChunkedAudio() {
+                if (!this.chunkMetadata || this.receivedChunks !== this.chunkMetadata.num_chunks) {
+                    console.error('Incomplete chunked audio received');
+                    return;
+                }
+
+                // Concatenate all chunks
+                const allSamples = this.audioChunks.flat();
+                console.log(`Playing ${allSamples.length} samples (${allSamples.length / this.chunkMetadata.sample_rate:.2f}s)`);
+
+                // Play concatenated audio
+                await this.playAudio(allSamples, this.chunkMetadata.sample_rate, this.chunkMetadata.text);
+
+                // Reset state
+                this.audioChunks = [];
+                this.chunkMetadata = null;
+                this.receivedChunks = 0;
             }
 
             async toggleRecording() {

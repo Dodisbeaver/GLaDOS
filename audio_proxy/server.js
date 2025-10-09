@@ -41,8 +41,10 @@ const app = uWS.App({
                     console.error('Failed to send response:', error);
                 }
             }
-            // Forward audio playback to all WebRTC clients
-            else if (data.type === 'audio_playback' || data.type === 'stop_playback') {
+            // Forward audio messages to all WebRTC clients
+            else if (data.type === 'audio_playback' || data.type === 'audio_start' ||
+                     data.type === 'audio_chunk' || data.type === 'audio_end' ||
+                     data.type === 'stop_playback') {
                 console.log(`Forwarding ${data.type} to ${webrtcClients.size} clients`);
                 const message = JSON.stringify(data);
                 webrtcClients.forEach(client => {

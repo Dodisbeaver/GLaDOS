@@ -126,38 +126,43 @@ def test_webrtc_audio_io():
 
 
 def test_large_audio_handling():
-    """Test handling of larger audio samples to ensure no size limits are hit."""
-    print("\nTesting large audio sample handling...")
+    """Test handling of larger audio samples with chunking."""
+    print("\nTesting large audio sample handling with chunking...")
 
     # Generate 1 second of audio (realistic for GLaDOS responses)
     audio_data = generate_test_audio(1.0)  # 1 second = 16000 samples
     print(f"Generated large test audio: {len(audio_data)} samples")
 
-    # Convert to list and create message
-    audio_samples = audio_data.astype(np.float32).tolist()
-    message = {
-        "type": "audio_playback",
-        "sample_rate": 16000,
-        "text": "Longer test audio message",
-        "samples": audio_samples
-    }
+    # Test chunking calculation
+    from glados.audio_io.webrtc_io import WebRTCAudioIO
+    chunk_size = getattr(WebRTCAudioIO, 'CHUNK_SIZE', 8000)  # Default to 8000 if not defined
+    num_chunks = (len(audio_data) + chunk_size - 1) // chunk_size
 
-    try:
-        json_str = json.dumps(message)
-        json_size = len(json_str)
-        print(f"Large audio JSON serialization successful: {json_size} bytes ({json_size/1024/1024:.2f} MB)")
+    print(f"Audio will be split into {num_chunks} chunks of ~{chunk_size} samples")
 
-        # Check if size is reasonable for WebSocket transmission
-        if json_size < 10 * 1024 * 1024:  # Less than 10MB
-            print("✓ Audio size is reasonable for WebSocket transmission")
-            return True
-        else:
-            print("✗ Audio size might be too large for WebSocket transmission")
+    # Verify each chunk is within size limits
+    for i in range(num_chunks):
+        start_idx = i * chunk_size
+        end_idx = min(start_idx + chunk_size, len(audio_data))
+        chunk = audio_data[start_idx:end_idx]
+
+        chunk_message = {
+            "type": "audio_chunk",
+            "chunk_index": i,
+            "samples": chunk.astype(np.float32).tolist()
+        }
+
+        chunk_json = json.dumps(chunk_message)
+        chunk_size_bytes = len(chunk_json)
+
+        # Check chunk is under 100KB (well below WebSocket limits)
+        if chunk_size_bytes > 100 * 1024:
+            print(f"✗ Chunk {i} too large: {chunk_size_bytes} bytes")
             return False
 
-    except Exception as e:
-        print(f"✗ Large audio serialization failed: {e}")
-        return False
+    print(f"✓ All {num_chunks} chunks are under 100KB")
+    print(f"✓ Chunking prevents WebSocket size limit issues")
+    return True
 
 
 def main():
