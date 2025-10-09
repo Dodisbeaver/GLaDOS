@@ -190,6 +190,8 @@
                 this.isConnected = false;
                 this.shouldReconnect = true;
                 this.reconnectTimer = null;
+                this.playbackContext = null;
+                this.playbackSource = null;
 
                 // Chunked audio playback state
                 this.audioChunks = [];
@@ -459,28 +461,69 @@
 
             async playAudio(samples, sampleRate, text) {
                 try {
-                    // Always create a fresh AudioContext for playback to avoid state issues
-                    const playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+                    // Ensure any existing playback is stopped before starting new audio
+                    this.stopAudio();
 
-                    const audioBuffer = playbackContext.createBuffer(1, samples.length, sampleRate);
+                    this.playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                    const audioBuffer = this.playbackContext.createBuffer(1, samples.length, sampleRate);
                     audioBuffer.copyToChannel(new Float32Array(samples), 0);
 
-                    const source = playbackContext.createBufferSource();
+                    const source = this.playbackContext.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(playbackContext.destination);
-                    source.start();
+                    source.connect(this.playbackContext.destination);
 
+                    this.playbackSource = source;
                     this.updateStatus(`GLaDOS: "${text}" (Playing response)`);
+
+                    await new Promise((resolve) => {
+                        source.onended = () => {
+                            this.cleanupPlayback();
+                            resolve();
+                        };
+                        source.start();
+                    });
 
                 } catch (error) {
                     console.error('Error playing audio:', error);
                     this.updateStatus('Audio playback error', true);
+                    this.cleanupPlayback();
                 }
             }
 
             stopAudio() {
-                // Audio will stop automatically when the buffer finishes
+                if (this.playbackSource) {
+                    try {
+                        this.playbackSource.stop();
+                    } catch (error) {
+                        console.warn('Error stopping audio source:', error);
+                    }
+                }
+
+                if (this.playbackContext) {
+                    try {
+                        this.playbackContext.close();
+                    } catch (error) {
+                        console.warn('Error closing playback context:', error);
+                    }
+                }
+
+                this.playbackSource = null;
+                this.playbackContext = null;
                 this.updateStatus('Audio playback stopped');
+            }
+
+            cleanupPlayback() {
+                if (this.playbackContext) {
+                    try {
+                        this.playbackContext.close();
+                    } catch (error) {
+                        console.warn('Error closing playback context:', error);
+                    }
+                }
+
+                this.playbackSource = null;
+                this.playbackContext = null;
             }
 
             updateStatus(message, isError = false) {
