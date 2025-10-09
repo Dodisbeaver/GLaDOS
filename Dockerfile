@@ -6,15 +6,34 @@ RUN apt-get update && apt-get install -y \
   git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN pip install uv
+RUN pip install --no-cache-dir uv
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY models/ ./models/
-COPY src/ ./src/
 
-RUN uv sync --extra api --extra cpu --no-dev \
-  && uv run glados download
+# Copy dependency metadata first so that dependency layers cache well
+COPY pyproject.toml README.md ./
+
+# Install project dependencies; cache download artifacts between builds
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv sync --extra api --extra cpu --no-dev
+
+# Copy the rest of the application source
+COPY src/ ./src/
+COPY configs/ ./configs/
+COPY models/ ./models/
+
+# Runtime entrypoint handles first-run model download into a persisted volume
+COPY docker/glados-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+RUN mkdir -p /app/models
+VOLUME ["/app/models"]
+
+ENV GLADOS_CONFIG_PATH=/app/configs/glados_config.yaml
+ENV GLADOS_MODELS_PATH=/app/models
+ENV GLADOS_AUDIO_IO=webrtc
 
 EXPOSE 5050
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uv", "run", "litestar", "--app", "glados.api.app:app", "run", "--host", "0.0.0.0", "--port", "5050"]
