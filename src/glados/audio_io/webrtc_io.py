@@ -21,7 +21,7 @@ class WebRTCAudioIO:
 
     SAMPLE_RATE: int = 16000  # Sample rate for audio processing
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
-    VAD_THRESHOLD: float = 0.8  # Threshold for VAD detection
+    VAD_THRESHOLD: float = 0.6  # Threshold for VAD detection (lowered from 0.8 for less sensitivity)
     CHUNK_SIZE: int = 3200  # Samples per chunk (~200ms at 16kHz, ~65KB JSON)
 
     def __init__(self, proxy_url: str = "ws://audio-proxy:3000/glados", vad_threshold: float | None = None) -> None:
@@ -40,7 +40,8 @@ class WebRTCAudioIO:
             raise ValueError("VAD threshold must be between 0 and 1")
 
         self._vad_model = VAD()
-        self._sample_queue: asyncio.Queue[tuple[NDArray[np.float32], bool]] = asyncio.Queue(maxsize=10)
+        # Allow a few seconds of headroom so ASR hiccups do not drop audio (~32ms per chunk)
+        self._sample_queue: asyncio.Queue[tuple[NDArray[np.float32], bool]] = asyncio.Queue(maxsize=160)
         self._proxy_url = proxy_url
         self._websocket = None
         self._is_playing = False

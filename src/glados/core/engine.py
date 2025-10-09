@@ -80,6 +80,10 @@ class GladosConfig(BaseModel):
     announcement: str | None
     personality_preprompt: list[PersonalityPrompt] | None = None
 
+    # ASR Voice Activity Detection parameters
+    asr_pause_limit: int = 1800  # Milliseconds of pause before processing speech
+    asr_vad_threshold: float = 0.6  # VAD sensitivity threshold (0.0-1.0)
+
     @classmethod
     def from_yaml(cls, path: str | Path, key_to_config: tuple[str, ...] = ("Glados",)) -> "GladosConfig":
         """
@@ -123,7 +127,9 @@ class GladosConfig(BaseModel):
             "GLADOS_INTERRUPTIBLE": "interruptible",
             "GLADOS_ASR_ENGINE": "asr_engine",
             "GLADOS_WAKE_WORD": "wake_word",
-            "GLADOS_ANNOUNCEMENT": "announcement"
+            "GLADOS_ANNOUNCEMENT": "announcement",
+            "GLADOS_ASR_PAUSE_LIMIT": "asr_pause_limit",
+            "GLADOS_ASR_VAD_THRESHOLD": "asr_vad_threshold"
         }
 
         for env_var, config_key in env_overrides.items():
@@ -132,6 +138,12 @@ class GladosConfig(BaseModel):
                 # Handle boolean conversion for interruptible
                 if config_key == "interruptible":
                     config[config_key] = env_value.lower() in ("true", "1", "yes", "on")
+                # Handle integer conversion for ASR pause limit
+                elif config_key == "asr_pause_limit":
+                    config[config_key] = int(env_value)
+                # Handle float conversion for VAD threshold
+                elif config_key == "asr_vad_threshold":
+                    config[config_key] = float(env_value)
                 else:
                     config[config_key] = env_value
 
@@ -174,6 +186,8 @@ class Glados:
         wake_word: str | None = None,
         announcement: str | None = None,
         personality_preprompt: tuple[dict[str, str], ...] = DEFAULT_PERSONALITY_PREPROMPT,
+        asr_pause_limit: int | None = None,
+        asr_vad_threshold: float | None = None,
     ) -> None:
         """
         Initialize the Glados voice assistant with configuration parameters.
@@ -203,6 +217,8 @@ class Glados:
         self.interruptible = interruptible
         self.wake_word = wake_word
         self.announcement = announcement
+        self.asr_pause_limit = asr_pause_limit
+        self.asr_vad_threshold = asr_vad_threshold
         self._messages: list[dict[str, str]] = list(personality_preprompt)
 
         # Initialize spoken text converter, that converts text to spoken text. eg. 12 -> "twelve"
@@ -238,6 +254,7 @@ class Glados:
             currently_speaking_event=self.currently_speaking_event,
             processing_active_event=self.processing_active_event,
             pause_time=self.PAUSE_TIME,
+            pause_limit=self.asr_pause_limit,
         )
 
         self.llm_processor = LanguageModelProcessor(
@@ -334,7 +351,7 @@ class Glados:
         tts_model: SpeechSynthesizerProtocol
         tts_model = get_speech_synthesizer(config.voice)
 
-        audio_io = get_audio_system(backend_type=config.audio_io)
+        audio_io = get_audio_system(backend_type=config.audio_io, vad_threshold=config.asr_vad_threshold)
 
         return cls(
             asr_model=asr_model,
@@ -347,6 +364,8 @@ class Glados:
             wake_word=config.wake_word,
             announcement=config.announcement,
             personality_preprompt=tuple(config.to_chat_messages()),
+            asr_pause_limit=config.asr_pause_limit,
+            asr_vad_threshold=config.asr_vad_threshold,
         )
 
     @classmethod

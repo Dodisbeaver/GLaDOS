@@ -31,7 +31,7 @@ class SpeechListener:
 
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
     BUFFER_SIZE: int = 800  # Milliseconds of buffer BEFORE VAD detection
-    PAUSE_LIMIT: int = 640  # Milliseconds of pause allowed before processing
+    PAUSE_LIMIT: int = 1800  # Milliseconds of pause allowed before processing (increased from 640ms)
     SIMILARITY_THRESHOLD: int = 2  # Threshold for wake word similarity
 
     def __init__(
@@ -45,6 +45,7 @@ class SpeechListener:
         wake_word: str | None,
         pause_time: float,
         interruptible: bool = True,
+        pause_limit: int | None = None,  # Optional override for PAUSE_LIMIT
     ) -> None:
         """
         Initializes the SpeechListener with audio I/O, inter-thread communication, and ASR model.
@@ -65,6 +66,10 @@ class SpeechListener:
         self.wake_word = wake_word.lower() if wake_word else None
         self.pause_time = pause_time
         self.interruptible = interruptible
+
+        # Override class-level PAUSE_LIMIT if provided
+        if pause_limit is not None:
+            self.PAUSE_LIMIT = pause_limit
 
         # Circular buffer to hold pre-activation samples
         self._buffer: deque[NDArray[np.float32]] = deque(maxlen=self.BUFFER_SIZE // self.VAD_SIZE)
