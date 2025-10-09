@@ -357,26 +357,46 @@ class WebRTCAudioIO:
         Raises:
             asyncio.QueueEmpty: If no sample available within timeout
         """
-        # Wait briefly for event loop to start (max 1 second)
-        import time
-        wait_start = time.time()
-        while self._client_loop is None and (time.time() - wait_start) < 1.0:
-            time.sleep(0.05)
+        # Use an event to wait for loop without blocking
+        loop_ready_event = threading.Event()
 
-        if self._client_loop is None:
-            # Event loop not ready yet, return empty result to avoid blocking startup
-            raise asyncio.QueueEmpty()
+        def check_loop_ready():
+            """Non-blocking check for event loop readiness."""
+            max_attempts = 20  # 1 second total at 0.05s intervals
+            for _ in range(max_attempts):
+                if self._client_loop is not None:
+                    loop_ready_event.set()
+                    return
+                threading.Event().wait(0.05)  # Non-blocking sleep alternative
+            # Timeout reached, event remains unset
+
+        # Start loop check in a separate thread to avoid blocking
+        check_thread = threading.Thread(target=check_loop_ready, daemon=True)
+        check_thread.start()
+
+        # Wait for loop to be ready or timeout
+        if not loop_ready_event.wait(timeout=1.0):
+            # Event loop not ready within timeout
+            raise asyncio.QueueEmpty("Event loop not ready")
+
+        # Double-check loop is still available (race condition protection)
+        current_loop = self._client_loop
+        if current_loop is None:
+            raise asyncio.QueueEmpty("Event loop became unavailable")
 
         # Schedule the async get on the event loop and wait for result
         try:
             future = asyncio.run_coroutine_threadsafe(
                 asyncio.wait_for(self._sample_queue.get(), timeout=timeout),
-                self._client_loop
+                current_loop
             )
             result = future.result(timeout=timeout + 0.5)  # Extra time for scheduling
             return result
         except TimeoutError:
-            raise asyncio.QueueEmpty()
+            raise asyncio.QueueEmpty("Timeout waiting for audio sample")
+        except RuntimeError as e:
+            # Handle case where event loop is closed/unavailable
+            raise asyncio.QueueEmpty(f"Event loop error: {e}")
 
     async def stream_audio_samples(self) -> AsyncGenerator[tuple[NDArray[np.float32], bool], None]:
         """Async generator that yields audio samples from the queue.

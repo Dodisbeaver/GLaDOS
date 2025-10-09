@@ -90,58 +90,74 @@ class LanguageModelProcessor:
             )
             return None
 
+    def _reset_think_filter_state(self) -> None:
+        """Reset the think tag filter state. Should be called on request start and error recovery."""
+        self._inside_think_tag = False
+        self._tag_buffer = ""
+
     def _filter_think_tags(self, chunk: str) -> str:
         """Filter out <think>...</think> tags from streaming content.
 
         Maintains state across chunks to handle tags split across multiple chunks.
+        Uses efficient parsing to avoid performance issues and memory leaks.
         """
         if not chunk:
             return chunk
 
+        # Prevent buffer from growing too large (security measure)
+        if len(self._tag_buffer) > 50:
+            logger.warning("Think tag buffer too large, resetting filter state")
+            self._reset_think_filter_state()
+
         result = []
-        i = 0
+        chunk_pos = 0
 
-        while i < len(chunk):
-            # Add previous buffer to check for tag boundaries
-            check_str = self._tag_buffer + chunk[i:]
+        # Process any buffered content first
+        if self._tag_buffer:
+            combined = self._tag_buffer + chunk
+            self._tag_buffer = ""
+        else:
+            combined = chunk
 
+        while chunk_pos < len(combined):
             if not self._inside_think_tag:
                 # Look for opening tag
-                if check_str.startswith("<think>"):
-                    self._inside_think_tag = True
-                    # Skip the tag
-                    skip_len = len("<think>") - len(self._tag_buffer)
-                    i += skip_len
-                    self._tag_buffer = ""
-                    continue
-                # Check if we're building up to a tag
-                elif "<think>"[:len(check_str)] == check_str and len(check_str) < 7:
-                    self._tag_buffer = check_str
+                tag_start = combined.find("<think>", chunk_pos)
+                if tag_start == -1:
+                    # No opening tag found, output remaining content
+                    result.append(combined[chunk_pos:])
                     break
                 else:
-                    # Not a tag, output the buffer and current char
-                    if self._tag_buffer:
-                        result.append(self._tag_buffer)
-                        self._tag_buffer = ""
-                    result.append(chunk[i])
-                    i += 1
+                    # Output content before tag
+                    result.append(combined[chunk_pos:tag_start])
+                    self._inside_think_tag = True
+                    chunk_pos = tag_start + 7  # len("<think>")
             else:
                 # Look for closing tag
-                if check_str.startswith("</think>"):
-                    self._inside_think_tag = False
-                    # Skip the tag
-                    skip_len = len("</think>") - len(self._tag_buffer)
-                    i += skip_len
-                    self._tag_buffer = ""
-                    continue
-                # Check if we're building up to a closing tag
-                elif "</think>"[:len(check_str)] == check_str and len(check_str) < 8:
-                    self._tag_buffer = check_str
+                tag_end = combined.find("</think>", chunk_pos)
+                if tag_end == -1:
+                    # No closing tag found, skip remaining content
                     break
                 else:
-                    # Inside think block, skip content
-                    self._tag_buffer = ""
-                    i += 1
+                    # Found closing tag, skip content inside think block
+                    self._inside_think_tag = False
+                    chunk_pos = tag_end + 8  # len("</think>")
+
+        # Handle partial tags at end of chunk
+        if chunk_pos < len(combined):
+            remaining = combined[chunk_pos:]
+            if self._inside_think_tag:
+                # Inside think block, don't output anything
+                pass
+            else:
+                # Check if we have a partial opening tag
+                for i in range(1, min(7, len(remaining) + 1)):
+                    if "<think>"[:i] == remaining[-i:]:
+                        self._tag_buffer = remaining[-i:]
+                        result.append(remaining[:-i])
+                        break
+                else:
+                    result.append(remaining)
 
         return "".join(result)
 
@@ -176,8 +192,9 @@ class LanguageModelProcessor:
             current_sentence_parts (list[str]): List of sentence parts to be processed.
         """
         sentence = "".join(current_sentence_parts)
-        # Remove markdown formatting, parenthetical asides, and chain-of-thought tags
-        sentence = re.sub(r"\*.*?\*|\(.*?\)|<think>.*?</think>", "", sentence, flags=re.DOTALL)
+        # Remove markdown formatting and parenthetical asides
+        # Note: <think> tags are already filtered out during streaming
+        sentence = re.sub(r"\*.*?\*|\(.*?\)", "", sentence)
         sentence = sentence.replace("\n\n", ". ").replace("\n", ". ").replace("  ", " ").replace(":", " ")
 
         if sentence and sentence != ".":  # Avoid sending just a period
@@ -207,8 +224,7 @@ class LanguageModelProcessor:
                 self.conversation_history.append({"role": "user", "content": detected_text})
 
                 # Reset think tag filter state for new request
-                self._inside_think_tag = False
-                self._tag_buffer = ""
+                self._reset_think_filter_state()
 
                 data = {
                     "model": self.model_name,
@@ -279,6 +295,8 @@ class LanguageModelProcessor:
                 except Exception as e:
                     logger.exception(f"LLM Processor: Unexpected error during LLM request/streaming: {e}")
                     self.tts_input_queue.put("I'm having a little trouble thinking right now.")
+                    # Reset filter state on error to prevent stale state
+                    self._reset_think_filter_state()
                 finally:
                     # Always send EOS if we started processing, unless interrupted early
                     if self.processing_active_event.is_set():  # Only send EOS if not interrupted
