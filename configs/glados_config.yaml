@@ -1,9 +1,9 @@
 Glados:
-  llm_model: "llama3.2"
-  completion_url: "http://localhost:11434/api/chat"
+  llm_model: "qwen3:8b"
+  completion_url: "http://host.docker.internal:11434/api/chat"  # Override with OLLAMA_BASE_URL env var
   api_key: null  # Add your API key here if needed!
   interruptible: true
-  audio_io: "sounddevice"
+  audio_io: "webrtc"  # Override with GLADOS_AUDIO_IO env var
   asr_engine: "tdt"
   wake_word: null
   voice: "glados"
