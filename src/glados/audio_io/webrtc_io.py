@@ -48,6 +48,7 @@ class WebRTCAudioIO:
         self._client_loop = None
         self._stop_event = threading.Event()
         self._connected = False
+        self._audio_buffer = np.array([], dtype=np.float32)  # Buffer for VAD processing
 
     async def _client_handler(self) -> None:
         """Handle WebSocket client connection to audio proxy."""
@@ -115,17 +116,31 @@ class WebRTCAudioIO:
 
         if message_type == "audio_data":
             # Receive audio data from WebRTC client via proxy
-            audio_samples = np.array(data["samples"], dtype=np.float32)
+            incoming_samples = np.array(data["samples"], dtype=np.float32)
 
-            # Apply VAD to the received audio
-            vad_value = self._vad_model(np.expand_dims(audio_samples, 0))
-            vad_confidence = vad_value > self.vad_threshold
+            # Add to buffer
+            self._audio_buffer = np.concatenate([self._audio_buffer, incoming_samples])
 
-            # Put audio sample in queue with backpressure handling
-            try:
-                self._sample_queue.put_nowait((audio_samples, bool(vad_confidence)))
-            except asyncio.QueueFull:
-                logger.warning("Audio queue full, dropping sample to prevent backpressure")
+            # Process in 512-sample chunks (required by VAD model for 16kHz)
+            vad_chunk_size = 512
+            while len(self._audio_buffer) >= vad_chunk_size:
+                # Extract chunk
+                audio_chunk = self._audio_buffer[:vad_chunk_size]
+                self._audio_buffer = self._audio_buffer[vad_chunk_size:]
+
+                # Apply VAD to the chunk
+                try:
+                    vad_value = self._vad_model(np.expand_dims(audio_chunk, 0))
+                    vad_confidence = vad_value > self.vad_threshold
+                except Exception as e:
+                    logger.warning(f"VAD processing failed: {e}, skipping chunk")
+                    vad_confidence = False
+
+                # Put audio chunk in queue with backpressure handling
+                try:
+                    self._sample_queue.put_nowait((audio_chunk, bool(vad_confidence)))
+                except asyncio.QueueFull:
+                    logger.warning("Audio queue full, dropping sample to prevent backpressure")
 
         elif message_type == "proxy_ready":
             # Audio proxy is ready
