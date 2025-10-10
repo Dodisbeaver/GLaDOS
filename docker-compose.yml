@@ -41,6 +41,20 @@ services:
     environment:
       - NODE_ENV=production
       - GLADOS_WS_URL=ws://glados:8765
+      - PORT=${PROXY_PORT:-3000}
+      - HTTPS_PORT=${PROXY_HTTPS_PORT:-10306}
+      # SSL configuration
+      - SSL_COUNTRY=${SSL_COUNTRY:-US}
+      - SSL_STATE=${SSL_STATE:-California}
+      - SSL_CITY=${SSL_CITY:-San Francisco}
+      - SSL_ORG=${SSL_ORG:-GLaDOS}
+      - SSL_OU=${SSL_OU:-Audio Proxy}
+      - SSL_CN=${SSL_CN:-audio-proxy}
+      - SSL_EMAIL=${SSL_EMAIL:-admin@localhost}
+      - SSL_LAN_IP=${SSL_LAN_IP:-192.168.1.100}
+      - SSL_EXTERNAL_IP=${SSL_EXTERNAL_IP:-}
+      - SSL_DOMAINS=${SSL_DOMAINS:-}
+      - SSL_DAYS=${SSL_DAYS:-365}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]

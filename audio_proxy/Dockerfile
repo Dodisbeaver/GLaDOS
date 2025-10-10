@@ -1,11 +1,12 @@
 FROM node:20-slim
 
-# Install curl for health checks, git for GitHub packages, and build tools for native modules
+# Install curl for health checks, git for GitHub packages, build tools for native modules, and openssl for SSL certificates
 RUN apt-get update && apt-get install -y \
     curl \
     git \
     build-essential \
     python3 \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -19,11 +20,14 @@ RUN npm install --only=production
 # Copy application code
 COPY . .
 
-# Create public directory for web interface
-RUN mkdir -p public
+# Create public directory for web interface and ssl directory
+RUN mkdir -p public ssl
+
+# Make scripts executable
+RUN chmod +x generate-ssl.sh entrypoint.sh
 
 # Fix permissions for node user
-RUN chown -R node:node /app && chmod -R 755 public
+RUN chown -R node:node /app && chmod -R 755 public ssl
 
 # Expose ports
 EXPOSE 3000
@@ -36,4 +40,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Run as non-root user
 USER node
 
-CMD ["npm", "start"]
+# Use entrypoint script to handle SSL certificate generation
+CMD ["./entrypoint.sh"]
