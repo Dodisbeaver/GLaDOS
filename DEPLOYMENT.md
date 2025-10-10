@@ -32,30 +32,30 @@ This guide covers deploying GLaDOS for various network configurations including 
 ```bash
 # .env
 SSL_LAN_IP=127.0.0.1
-PROXY_PORT=3000
-PROXY_HTTPS_PORT=10306
+PROXY_PORT=6080
+PROXY_HTTPS_PORT=6443
 ```
-- Access: `http://localhost:3000` or `https://localhost:10306`
+- Access: `http://localhost:6080` or `https://localhost:6443`
 
 ### LAN Access
 ```bash
 # .env
 SSL_LAN_IP=192.168.1.100  # Your server's IP
-PROXY_PORT=3000
-PROXY_HTTPS_PORT=10306
+PROXY_PORT=6080
+PROXY_HTTPS_PORT=6443
 ```
-- Access from LAN: `http://192.168.1.100:3000` or `https://192.168.1.100:10306`
+- Access from LAN: `http://192.168.1.100:6080` or `https://192.168.1.100:6443`
 
 ### External Access (with port forwarding)
 ```bash
 # .env
 SSL_LAN_IP=192.168.1.100
 SSL_EXTERNAL_IP=203.0.113.10  # Your public IP
-PROXY_PORT=3000
-PROXY_HTTPS_PORT=10306
+PROXY_PORT=6080
+PROXY_HTTPS_PORT=6443
 ```
-- Forward ports 3000 and 10306 on your router
-- Access externally: `https://203.0.113.10:10306`
+- Forward ports 6080 and 6443 on your router
+- Access externally: `https://203.0.113.10:6443`
 
 ### Custom Domain
 ```bash
@@ -65,7 +65,7 @@ SSL_EXTERNAL_IP=203.0.113.10
 SSL_DOMAINS=glados.mydomain.com
 ```
 - Set DNS A record: `glados.mydomain.com → 203.0.113.10`
-- Access: `https://glados.mydomain.com:10306`
+- Access: `https://glados.mydomain.com:6443`
 
 ## SSL Configuration
 
@@ -104,23 +104,23 @@ SSL_LAN_IP=192.168.1.50 SSL_EXTERNAL_IP=203.0.113.10 ./generate-ssl.sh
 | Service | Default Port | Environment Variable | Description |
 |---------|--------------|---------------------|-------------|
 | TTS API | 5050 | `TTS_PORT` | Text-to-speech API |
-| Audio Proxy (HTTP) | 3000 | `PROXY_PORT` | Web interface & WebSocket |
-| Audio Proxy (HTTPS) | 10306 | `PROXY_HTTPS_PORT` | Secure web interface |
+| Audio Proxy (HTTP) | 6080 | `PROXY_PORT` | Web interface & WebSocket |
+| Audio Proxy (HTTPS) | 6443 | `PROXY_HTTPS_PORT` | Secure web interface |
 
 ## Testing Your Deployment
 
 1. **Health Check:**
    ```bash
-   curl http://your-server-ip:3000/health
+   curl http://your-server-ip:6080/health
    ```
 
 2. **HTTPS Access:**
    ```bash
-   curl -k https://your-server-ip:10306/health
+   curl -k https://your-server-ip:6443/health
    ```
 
 3. **From another machine on your LAN:**
-   - Open browser to `https://192.168.1.100:10306` (replace with your IP)
+   - Open browser to `https://192.168.1.100:6443` (replace with your IP)
    - You'll get a security warning (expected for self-signed certificates)
    - Click "Advanced" → "Proceed to..." to continue
 

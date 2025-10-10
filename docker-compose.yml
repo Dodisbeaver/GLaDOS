@@ -22,7 +22,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/api/chat}
       - GLADOS_AUDIO_IO=webrtc
-      - GLADOS_PROXY_URL=ws://audio-proxy:3000/glados
+      - GLADOS_PROXY_URL=ws://audio-proxy:6080/glados
     depends_on:
       - audio-proxy
     restart: unless-stopped
@@ -35,13 +35,13 @@ services:
     build:
       context: ./audio_proxy
     ports:
-      - "${PROXY_PORT:-3000}:3000"
-      - "${PROXY_HTTPS_PORT:-10306}:3443"
+      - "${PROXY_PORT:-6080}:6080"
+      - "${PROXY_HTTPS_PORT:-6443}:6443"
     environment:
       - NODE_ENV=production
       - GLADOS_WS_URL=ws://glados:8765
-      - PORT=${PROXY_PORT:-3000}
-      - HTTPS_PORT=${PROXY_HTTPS_PORT:-10306}
+      - PORT=${PROXY_PORT:-6080}
+      - HTTPS_PORT=${PROXY_HTTPS_PORT:-6443}
       # SSL configuration
       - SSL_COUNTRY=${SSL_COUNTRY:-US}
       - SSL_STATE=${SSL_STATE:-California}
@@ -56,7 +56,7 @@ services:
       - SSL_DAYS=${SSL_DAYS:-365}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:6080/health"]
       interval: 30s
       timeout: 10s
       retries: 3

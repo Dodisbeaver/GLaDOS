@@ -30,12 +30,12 @@ RUN chmod +x generate-ssl.sh entrypoint.sh
 RUN chown -R node:node /app && chmod -R 755 public ssl
 
 # Expose ports
-EXPOSE 3000
-EXPOSE 3443
+EXPOSE 6080
+EXPOSE 6443
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
+  CMD curl -f http://localhost:6080/health || exit 1
 
 # Run as non-root user
 USER node

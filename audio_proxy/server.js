@@ -2,8 +2,8 @@ const uWS = require('uwebsockets.js');
 const path = require('path');
 const fs = require('fs');
 
-const PORT = process.env.PORT || 3000;
-const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+const PORT = process.env.PORT || 6080;
+const HTTPS_PORT = process.env.HTTPS_PORT || 6443;
 
 // SSL certificate paths
 const SSL_KEY = path.join(__dirname, 'ssl', 'key.pem');

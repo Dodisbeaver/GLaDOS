@@ -19,8 +19,8 @@ fi
 
 echo ""
 echo "🌐 Network Configuration:"
-echo "   - HTTP Port: ${PORT:-3000}"
-echo "   - HTTPS Port: ${HTTPS_PORT:-3443}"
+echo "   - HTTP Port: ${PORT:-6080}"
+echo "   - HTTPS Port: ${HTTPS_PORT:-6443}"
 echo "   - LAN IP: ${SSL_LAN_IP:-192.168.1.100}"
 if [ -n "$SSL_EXTERNAL_IP" ]; then
     echo "   - External IP: $SSL_EXTERNAL_IP"
