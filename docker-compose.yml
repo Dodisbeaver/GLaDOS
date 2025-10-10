@@ -28,7 +28,6 @@ services:
     restart: unless-stopped
     networks:
       - default
-      - ollama-network
 
 
   # Audio Proxy Service (NEW - WebRTC approach)
@@ -71,5 +70,3 @@ volumes:
 networks:
   default:
     name: glados-network
-  ollama-network:
-    external: true
