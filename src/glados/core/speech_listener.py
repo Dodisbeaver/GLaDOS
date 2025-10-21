@@ -218,6 +218,36 @@ class SpeechListener:
         closest_distance = min(distance(word.lower(), self.wake_word) for word in words)
         return closest_distance < self.SIMILARITY_THRESHOLD
 
+    def _check_special_commands(self, text: str) -> bool:
+        """
+        Check for special commands like clearing conversation history.
+
+        Args:
+            text: The transcribed text to check for special commands
+
+        Returns:
+            True if a special command was processed, False otherwise
+        """
+        text_lower = text.lower()
+
+        # Define phrases that trigger memory clearing
+        clear_phrases = [
+            "clear memory", "clear conversation", "reset conversation",
+            "forget everything", "forget our conversation", "start over",
+            "clear history", "reset memory", "new conversation"
+        ]
+
+        # Check if any clear phrase is in the text
+        for phrase in clear_phrases:
+            if phrase in text_lower:
+                logger.info(f"Memory clear command detected: '{text}'")
+                # Signal to clear conversation history
+                self.llm_queue.put("__CLEAR_MEMORY__")
+                self.processing_active_event.set()
+                return True
+
+        return False
+
     def reset(self) -> None:
         """
         Resets the internal state of the speech listener, clearing all audio buffers and counters.
@@ -253,7 +283,11 @@ class SpeechListener:
         if detected_text:
             logger.success(f"ASR text: '{detected_text}'")
 
-            if self.wake_word and not self._wakeword_detected(detected_text):
+            # Check for special commands first (these bypass wake word requirements)
+            if self._check_special_commands(detected_text):
+                # Special command processed, don't send to LLM
+                pass
+            elif self.wake_word and not self._wakeword_detected(detected_text):
                 logger.info(f"Required wake word {self.wake_word=} not detected.")
             else:
                 self.llm_queue.put(detected_text)
