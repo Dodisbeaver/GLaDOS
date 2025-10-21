@@ -75,17 +75,7 @@ class SpeechPlayer:
                         logger.success(f"TTS interrupted at {percentage_played}%: {clipped_text}")
 
                         assistant_text_accumulator.append(clipped_text)
-                        self.conversation_history.append(
-                            {"role": "assistant", "content": " ".join(assistant_text_accumulator)}
-                        )
-                        self.conversation_history.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"[SYSTEM: User interrupted mid-response! Full intended output: '{audio_msg.text}']"
-                                ),
-                            }
-                        )
+                        # Note: Conversation history is now managed by LLM processor only
                         assistant_text_accumulator = []  # Reset accumulator
                         self._clear_audio_queue()
 

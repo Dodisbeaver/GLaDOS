@@ -194,6 +194,21 @@ class LanguageModelProcessor:
                     continue
 
                 logger.info(f"LLM Processor: Received text for LLM: '{detected_text}'")
+
+                # Handle special commands
+                if detected_text == "__CLEAR_MEMORY__":
+                    # Clear conversation history except for the system prompt
+                    original_length = len(self.conversation_history)
+                    # Keep only system messages (usually the first message)
+                    self.conversation_history = [msg for msg in self.conversation_history if msg.get("role") == "system"]
+                    cleared_count = original_length - len(self.conversation_history)
+                    logger.info(f"Conversation history cleared. Removed {cleared_count} messages.")
+
+                    # Send confirmation message to TTS
+                    self.tts_input_queue.put("Memory cleared... Let's start fresh.")
+                    self.tts_input_queue.put("<EOS>")
+                    continue
+
                 self.conversation_history.append({"role": "user", "content": detected_text})
 
                 # Reset think tag filter state for new request
@@ -206,7 +221,15 @@ class LanguageModelProcessor:
                     # Add other parameters like temperature, max_tokens if needed from config
                 }
 
+                # Debug logging to check for duplicate messages
+                logger.debug(f"LLM Processor: Conversation history length: {len(self.conversation_history)}")
+                if len(self.conversation_history) <= 5:  # Only log short conversations to avoid spam
+                    logger.debug(f"LLM Processor: Full conversation history: {self.conversation_history}")
+                else:
+                    logger.debug(f"LLM Processor: Last 3 messages: {self.conversation_history[-3:]}")
+
                 sentence_buffer: list[str] = []
+                assistant_response_buffer: list[str] = []  # Track full assistant response
                 try:
                     logger.debug(f"LLM Processor: Sending POST to {self.completion_url}")
                     with requests.post(
@@ -229,6 +252,7 @@ class LanguageModelProcessor:
                                     chunk = self._process_chunk(cleaned_line_data)
                                     if chunk:  # Chunk can be an empty string, but None means no actual content
                                         sentence_buffer.append(chunk)
+                                        assistant_response_buffer.append(chunk)  # Track for conversation history
                                         # Split on defined punctuation or if chunk itself is punctuation
                                         if chunk.strip() in self.PUNCTUATION_SET and (
                                             len(sentence_buffer) < 2 or not sentence_buffer[-2].strip().isdigit()
@@ -245,6 +269,18 @@ class LanguageModelProcessor:
                         # After loop, process any remaining buffer content if not interrupted
                         if self.processing_active_event.is_set() and sentence_buffer:
                             self._process_sentence_for_tts(sentence_buffer)
+
+                        # Add the complete assistant response to conversation history
+                        # Only add if we completed normally (not interrupted)
+                        if assistant_response_buffer and self.processing_active_event.is_set():
+                            full_response = "".join(assistant_response_buffer).strip()
+                            if full_response:  # Only add non-empty responses
+                                self.conversation_history.append({"role": "assistant", "content": full_response})
+                                logger.debug(f"LLM Processor: Added assistant response to history: '{full_response[:100]}...'")
+                            else:
+                                logger.debug("LLM Processor: Empty assistant response, not adding to history")
+                        elif assistant_response_buffer and not self.processing_active_event.is_set():
+                            logger.debug("LLM Processor: Response was interrupted, not adding partial response to history")
 
                 except requests.exceptions.ConnectionError as e:
                     logger.error(f"LLM Processor: Connection error to LLM service: {e}")
