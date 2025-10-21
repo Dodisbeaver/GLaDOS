@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.28.1",
     "rich>=14.0.0",
     "websockets>=14.0",
+    "piper-tts>=1.2.0",
 ]
 
 [project.optional-dependencies]

@@ -38,9 +38,9 @@ def get_speech_synthesizer(
         ValueError: If the specified TTS engine type is not supported
     """
     if voice.lower() == "glados":
-        from ..TTS import tts_glados
+        from ..TTS import tts_piper
 
-        return tts_glados.SpeechSynthesizer()
+        return tts_piper.PiperTTSSynthesizer()
 
     from ..TTS import tts_kokoro
 

@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     libportaudio2 \
     portaudio19-dev \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for dependency management
@@ -24,6 +25,7 @@ COPY pyproject.toml README.md ./
 COPY src/ ./src/
 COPY configs/ ./configs/
 COPY data/ ./data/
+COPY models/ ./src_models/
 
 # Build stage for CPU variant
 FROM base AS cpu-variant

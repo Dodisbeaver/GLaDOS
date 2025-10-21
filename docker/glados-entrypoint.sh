@@ -14,6 +14,20 @@ else
     echo "Models already present, skipping download"
 fi
 
+# Copy Piper models if they don't exist in the volume
+if [ ! -f "${GLADOS_MODELS_PATH}/TTS/glados_piper_medium.onnx" ]; then
+    echo "Copying Piper TTS models to volume..."
+    mkdir -p "${GLADOS_MODELS_PATH}/TTS"
+    if [ -f "/app/src_models/TTS/glados_piper_medium.onnx" ]; then
+        cp /app/src_models/TTS/glados_piper_medium.onnx* "${GLADOS_MODELS_PATH}/TTS/"
+        echo "Piper models copied successfully"
+    else
+        echo "Warning: Piper models not found in build, will be downloaded by glados download if available"
+    fi
+else
+    echo "Piper models already present"
+fi
+
 # Check if custom config is mounted, otherwise use default
 if [ ! -f "${GLADOS_CONFIG_PATH}" ]; then
     echo "Using default GLaDOS configuration"

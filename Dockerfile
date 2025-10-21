@@ -3,6 +3,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
   libportaudio2 \
   portaudio19-dev \
+  espeak-ng \
   git \
   && rm -rf /var/lib/apt/lists/*
 
@@ -20,7 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy the rest of the application source
 COPY src/ ./src/
 COPY configs/ ./configs/
-COPY models/ ./models/
+COPY models/ ./src_models/
 
 # Runtime entrypoint handles first-run model download into a persisted volume
 COPY docker/glados-entrypoint.sh /entrypoint.sh
