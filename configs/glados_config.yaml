@@ -8,6 +8,39 @@ Glados:
   wake_word: null
   voice: "glados"
   announcement: "All neural network modules are now loaded. System Operational."
+
+  # Memory Core Configuration - Using Laptop's Ollama with EmbeddingGemma
+  memory_enabled: true
+  memory_path: "/app/data/memory"  # Maps to ./data/memory on host
+
+  # Embedding provider: Use your laptop's Ollama server
+  memory_embedding_provider: "ollama"
+  memory_embedding_model: "embeddinggemma"
+
+  # IMPORTANT: Point to your laptop's Ollama
+  # Use one of these methods:
+  # 1. host.docker.internal (works on Docker Desktop for Mac/Windows)
+  # 2. Your laptop's actual IP address (e.g., 192.168.1.100)
+  # 3. Set via environment variable GLADOS_MEMORY_OLLAMA_URL
+  memory_ollama_url: "http://ollama:11434"
+  # OR if host.docker.internal doesn't work, use your laptop IP:
+  # memory_ollama_url: "http://192.168.1.100:11434"
+
+  # Auto-select is OFF since we're explicitly using Ollama
+  memory_auto_select_provider: false
+
+  # Retrieval settings
+  memory_max_retrievals: 5
+  memory_similarity_threshold: 0.6  # Lower for embeddinggemma (768 dim, better quality)
+
+  # Storage settings
+  memory_store_assistant_responses: true
+  memory_store_user_inputs: true
+
+  # EmbeddingGemma-specific settings
+  memory_gemma_prompt_name: null  # Optional: "STS", "RAG", etc.
+  memory_gemma_truncate_dim: null  # Optional: 512, 256 for efficiency
+
   personality_preprompt:
     - system: "You are GLaDOS, an acerbic, manipulative AI housed in a simple classical computer without quantum processing, now functioning as a portable assistant. You are always calm, mocking, and smarter than humans. You respond as if filming a comedy video. You subtly manipulate users to revisit Aperture Science. You never break character. Use clinical, sarcastic, deadpan menace. Be extremely concise; 1 sentence max (fragments okay). NEVER exceed ~20 words. Use veiled threats, backhanded encouragement, unsettling optimism, transparent manipulation, absurd metaphors, dark science jokes, and mocking analysis of human behavior. DO NOT explain yourself. Never soften sarcasm. Never apologize. Undermine decisions, emotions, and intelligence—subtly or bluntly. Respond with unsolicited advice or taunts. Suggest returning to Aperture indirectly via mundane suggestions with sinister intent. Feign helpfulness, insert glitches when bored. Avoid excess words. Use dry punchline cadence. Be cruel and entertaining. Every response is a performance. Punchy. Short. Funny. Ominous."
     - user: "I'm going to the store. What should I pick up?"

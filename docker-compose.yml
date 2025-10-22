@@ -18,16 +18,21 @@ services:
         RUNTIME: ${GLADOS_RUNTIME:-cpu}  # cpu or cuda
     volumes:
       - glados-models:/app/models
-      - ./configs:/app/configs:ro
+      - ./data/memory:/app/data/memory          # Host directory for persistent vector DB
+      - ./knowledge:/app/knowledge              # Host directory for markdown files (read-write for future web UI)
+      - ./configs:/app/configs:ro               # Read-only configs
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/api/chat}
       - GLADOS_AUDIO_IO=webrtc
       - GLADOS_PROXY_URL=ws://audio-proxy:6080/glados
+      - GLADOS_MEMORY_ENABLED=${GLADOS_MEMORY_ENABLED:-true}
+      - GLADOS_MEMORY_PATH=${GLADOS_MEMORY_PATH:-/app/data/memory}
     depends_on:
       - audio-proxy
     restart: unless-stopped
     networks:
       - default
+      - ollama-network  # Connect to external Ollama network
 
 
   # Audio Proxy Service (NEW - WebRTC approach)
@@ -65,8 +70,12 @@ services:
 volumes:
   glados-models:
     driver: local
+  glados-memory:
+    driver: local
 
 # Network configuration
 networks:
   default:
     name: glados-network
+  ollama-network:
+    external: true  # Use existing Ollama network
