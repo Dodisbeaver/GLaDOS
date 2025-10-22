@@ -21,12 +21,6 @@ WORKDIR /app
 # Copy dependency files first for better layer caching
 COPY pyproject.toml README.md ./
 
-# Copy source code
-COPY src/ ./src/
-COPY configs/ ./configs/
-COPY data/ ./data/
-COPY models/ ./src_models/
-
 # Build stage for CPU variant
 FROM base AS cpu-variant
 RUN uv sync --extra cpu --no-dev
@@ -35,8 +29,15 @@ RUN uv sync --extra cpu --no-dev
 FROM base AS gpu-variant
 RUN uv sync --extra cuda --no-dev
 
+# Copy source code AFTER dependency installation (better caching)
+FROM ${RUNTIME}-variant AS with-source
+COPY src/ ./src/
+COPY configs/ ./configs/
+COPY data/ ./data/
+COPY models/ ./src_models/
+
 # Final stage - use build arg to select variant
-FROM ${RUNTIME}-variant AS final
+FROM with-source AS final
 
 # Create non-root user for security
 RUN useradd -m -u 1000 glados
