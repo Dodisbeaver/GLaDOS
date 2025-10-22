@@ -10,6 +10,8 @@ from loguru import logger
 from pydantic import HttpUrl  # If HttpUrl is used by config
 import requests
 
+from .memory_core import MemoryCore
+
 
 class LanguageModelProcessor:
     """
@@ -32,6 +34,9 @@ class LanguageModelProcessor:
         processing_active_event: threading.Event,  # To check if we should stop streaming
         shutdown_event: threading.Event,
         pause_time: float = 0.05,
+        memory_core: MemoryCore | None = None,
+        store_user_inputs: bool = True,
+        store_assistant_responses: bool = True,
     ) -> None:
         self.llm_input_queue = llm_input_queue
         self.tts_input_queue = tts_input_queue
@@ -42,6 +47,9 @@ class LanguageModelProcessor:
         self.processing_active_event = processing_active_event
         self.shutdown_event = shutdown_event
         self.pause_time = pause_time
+        self.memory_core = memory_core
+        self.store_user_inputs = store_user_inputs
+        self.store_assistant_responses = store_assistant_responses
 
         self.prompt_headers = {"Content-Type": "application/json"}
 
@@ -211,13 +219,43 @@ class LanguageModelProcessor:
 
                 self.conversation_history.append({"role": "user", "content": detected_text})
 
+                # Retrieve relevant memories for context BEFORE storing the new input
+                # This prevents the just-stored message from being the top hit
+                memory_context = ""
+                if self.memory_core:
+                    relevant_memories = self.memory_core.retrieve_memories(
+                        query=detected_text,
+                        memory_types=["episodic", "semantic", "procedural"]
+                    )
+                    if relevant_memories:
+                        memory_context = self.memory_core.format_context_for_llm(relevant_memories)
+                        logger.debug(f"LLM Processor: Retrieved {len(relevant_memories)} relevant memories")
+
+                # Store user input in memory if enabled (after retrieval)
+                if self.memory_core and self.store_user_inputs:
+                    self.memory_core.store_memory(
+                        text=detected_text,
+                        memory_type="episodic",
+                        speaker="user"
+                    )
+
                 # Reset think tag filter state for new request
                 self._reset_think_filter_state()
+
+                # Prepare messages with optional memory context
+                messages = self.conversation_history.copy()
+
+                # Insert memory context before the last user message if available
+                if memory_context:
+                    # Insert memory context as a system message before the current user input
+                    memory_message = {"role": "system", "content": memory_context}
+                    # Insert before the last message (current user input)
+                    messages.insert(-1, memory_message)
 
                 data = {
                     "model": self.model_name,
                     "stream": True,
-                    "messages": self.conversation_history,
+                    "messages": messages,
                     # Add other parameters like temperature, max_tokens if needed from config
                 }
 
@@ -277,6 +315,14 @@ class LanguageModelProcessor:
                             if full_response:  # Only add non-empty responses
                                 self.conversation_history.append({"role": "assistant", "content": full_response})
                                 logger.debug(f"LLM Processor: Added assistant response to history: '{full_response[:100]}...'")
+
+                                # Store assistant response in memory if enabled
+                                if self.memory_core and self.store_assistant_responses:
+                                    self.memory_core.store_memory(
+                                        text=full_response,
+                                        memory_type="episodic",
+                                        speaker="assistant"
+                                    )
                             else:
                                 logger.debug("LLM Processor: Empty assistant response, not adding to history")
                         elif assistant_response_buffer and not self.processing_active_event.is_set():
