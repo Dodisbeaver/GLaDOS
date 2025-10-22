@@ -1,0 +1,429 @@
+"""
+Memory Core module for GLaDOS voice assistant.
+
+This module provides persistent memory functionality using vector embeddings
+and semantic search to enhance conversation context and user experience.
+"""
+
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, NamedTuple
+
+import lancedb
+import numpy as np
+from loguru import logger
+
+from .embedding_providers import EmbeddingProvider, create_embedding_provider, get_recommended_provider_for_device
+
+
+class MemoryEntry(NamedTuple):
+    """Represents a single memory entry with metadata."""
+    id: str
+    text: str
+    embedding: list[float]
+    timestamp: float
+    memory_type: str
+    speaker: str
+    metadata: dict[str, Any] | None = None
+
+
+class MemoryCore:
+    """
+    Manages persistent memory for GLaDOS using vector embeddings and semantic search.
+
+    This class handles:
+    - Embedding generation using lightweight sentence transformers
+    - Vector storage with LanceDB for efficient similarity search
+    - Memory retrieval based on semantic similarity
+    - Different memory types (episodic, semantic, procedural)
+    """
+
+    def __init__(
+        self,
+        memory_path: str | Path = "data/memory",
+        embedding_model: str = "all-MiniLM-L6-v2",
+        embedding_provider: str = "sentence_transformers",
+        max_retrievals: int = 5,
+        similarity_threshold: float = 0.7,
+        enable_memory: bool = True,
+        auto_select_provider: bool = False,
+        **embedding_kwargs: Any,
+    ) -> None:
+        """
+        Initialize the Memory Core with embedding model and vector database.
+
+        Args:
+            memory_path: Path to store the memory database
+            embedding_model: Model name/identifier for embeddings
+            embedding_provider: Provider type ("sentence_transformers", "embeddinggemma")
+            max_retrievals: Maximum number of memories to retrieve
+            similarity_threshold: Minimum similarity score for retrieval
+            enable_memory: Whether memory functionality is enabled
+            auto_select_provider: Automatically select best provider for hardware
+            **embedding_kwargs: Additional kwargs for embedding provider
+        """
+        self.memory_path = Path(memory_path)
+        self.max_retrievals = max_retrievals
+        self.similarity_threshold = similarity_threshold
+        self.enable_memory = enable_memory
+
+        if not self.enable_memory:
+            logger.info("Memory Core: Memory functionality disabled")
+            return
+
+        # Ensure memory directory exists
+        self.memory_path.mkdir(parents=True, exist_ok=True)
+
+        # Auto-select provider if requested
+        if auto_select_provider:
+            embedding_provider, embedding_model = get_recommended_provider_for_device()
+            logger.info(f"Memory Core: Auto-selected {embedding_provider} with {embedding_model}")
+
+        # Initialize embedding provider
+        logger.info(f"Memory Core: Loading {embedding_provider} with model {embedding_model}")
+        try:
+            self.encoder: EmbeddingProvider = create_embedding_provider(
+                provider_type=embedding_provider,
+                model_name=embedding_model,
+                **embedding_kwargs
+            )
+            self.embedding_dim = self.encoder.get_embedding_dimension()
+            logger.success(f"Memory Core: Loaded embedding provider (dim={self.embedding_dim})")
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to load embedding provider: {e}")
+            self.enable_memory = False
+            return
+
+        # Initialize vector database
+        try:
+            self.db = lancedb.connect(str(self.memory_path))
+            self._initialize_table()
+            logger.success("Memory Core: Vector database initialized")
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to initialize vector database: {e}")
+            self.enable_memory = False
+
+    def _initialize_table(self) -> None:
+        """Initialize or connect to the memory table."""
+        try:
+            # Try to open existing table
+            self.table = self.db.open_table("memories")
+            logger.debug("Memory Core: Connected to existing memory table")
+        except Exception:
+            # Create new table with dummy data to establish schema
+            logger.info("Memory Core: Creating new memory table")
+            dummy_data = [{
+                "id": "init",
+                "text": "initialization",
+                "embedding": [0.0] * self.embedding_dim,
+                "timestamp": time.time(),
+                "memory_type": "system",
+                "speaker": "system",
+                "metadata": "{}"
+            }]
+            # Create table with data (schema inferred from data structure)
+            self.table = self.db.create_table("memories", dummy_data)
+            # Remove the dummy entry
+            self.table.delete("id = 'init'")
+
+    def embed_text(self, text: str) -> list[float]:
+        """Generate embedding for text."""
+        if not self.enable_memory:
+            return []
+
+        try:
+            embedding = self.encoder.encode(text)
+            # Handle single text case
+            if embedding.ndim == 1:
+                return embedding.tolist()
+            else:
+                return embedding[0].tolist()
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to generate embedding: {e}")
+            return []
+
+    def store_memory(
+        self,
+        text: str,
+        memory_type: str = "episodic",
+        speaker: str = "user",
+        metadata: dict[str, Any] | None = None
+    ) -> str:
+        """
+        Store a new memory entry.
+
+        Args:
+            text: The text content to store
+            memory_type: Type of memory (episodic, semantic, procedural)
+            speaker: Who said/did this (user, assistant, system)
+            metadata: Additional metadata dictionary
+
+        Returns:
+            The memory ID if successful, empty string if failed
+        """
+        if not self.enable_memory or not text.strip():
+            return ""
+
+        try:
+            # Generate embedding
+            embedding = self.embed_text(text)
+            if not embedding:
+                return ""
+
+            # Create memory entry
+            memory_id = f"{memory_type}_{speaker}_{int(time.time() * 1000)}"
+            entry = {
+                "id": memory_id,
+                "text": text.strip(),
+                "embedding": embedding,
+                "timestamp": time.time(),
+                "memory_type": memory_type,
+                "speaker": speaker,
+                "metadata": json.dumps(metadata or {})
+            }
+
+            # Store in database
+            self.table.add([entry])
+            logger.debug(f"Memory Core: Stored memory {memory_id}: {text[:50]}...")
+            return memory_id
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to store memory: {e}")
+            return ""
+
+    def retrieve_memories(
+        self,
+        query: str,
+        memory_types: list[str] | None = None,
+        speaker_filter: str | None = None,
+        max_results: int | None = None,
+        exclude_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Retrieve relevant memories based on semantic similarity.
+
+        Args:
+            query: Query text to search for
+            memory_types: Filter by memory types (None for all)
+            speaker_filter: Filter by speaker (None for all)
+            max_results: Override default max retrievals
+            exclude_ids: List of memory IDs to exclude from results
+
+        Returns:
+            List of memory dictionaries with similarity scores
+        """
+        if not self.enable_memory or not query.strip():
+            return []
+
+        try:
+            # Generate query embedding
+            query_embedding = self.embed_text(query)
+            if not query_embedding:
+                return []
+
+            # Build filter condition
+            filter_parts = []
+            if memory_types:
+                type_filter = " OR ".join([f"memory_type = '{t}'" for t in memory_types])
+                filter_parts.append(f"({type_filter})")
+            if speaker_filter:
+                filter_parts.append(f"speaker = '{speaker_filter}'")
+            if exclude_ids:
+                # Exclude specific memory IDs
+                exclude_filter = " AND ".join([f"id != '{eid}'" for eid in exclude_ids])
+                filter_parts.append(f"({exclude_filter})")
+
+            filter_condition = " AND ".join(filter_parts) if filter_parts else None
+
+            # Perform vector search with cosine metric
+            max_results = max_results or self.max_retrievals
+            search = self.table.search(query_embedding).metric("cosine").limit(max_results)
+
+            if filter_condition:
+                search = search.where(filter_condition)
+
+            results = search.to_list()
+
+            # Filter by similarity threshold and format results
+            relevant_memories = []
+            for result in results:
+                # With cosine metric, _distance is cosine distance (1 - cosine_similarity)
+                # So similarity = 1 - distance
+                similarity = 1.0 - result["_distance"]
+
+                if similarity >= self.similarity_threshold:
+                    memory = {
+                        "id": result["id"],
+                        "text": result["text"],
+                        "similarity": similarity,
+                        "timestamp": result["timestamp"],
+                        "memory_type": result["memory_type"],
+                        "speaker": result["speaker"],
+                        "metadata": json.loads(result["metadata"]) if result["metadata"] else {}
+                    }
+                    relevant_memories.append(memory)
+
+            # Sort by similarity (highest first)
+            relevant_memories.sort(key=lambda x: x["similarity"], reverse=True)
+
+            if relevant_memories:
+                logger.debug(f"Memory Core: Retrieved {len(relevant_memories)} memories for query: {query[:50]}...")
+
+            return relevant_memories
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to retrieve memories: {e}")
+            return []
+
+    def get_recent_memories(
+        self,
+        hours: int = 24,
+        memory_types: list[str] | None = None,
+        max_results: int | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Get recent memories within specified time window.
+
+        Args:
+            hours: Number of hours to look back
+            memory_types: Filter by memory types
+            max_results: Maximum number of results
+
+        Returns:
+            List of recent memory dictionaries
+        """
+        if not self.enable_memory:
+            return []
+
+        try:
+            cutoff_time = time.time() - (hours * 3600)
+
+            # Build filter
+            filter_parts = [f"timestamp >= {cutoff_time}"]
+            if memory_types:
+                type_filter = " OR ".join([f"memory_type = '{t}'" for t in memory_types])
+                filter_parts.append(f"({type_filter})")
+
+            filter_condition = " AND ".join(filter_parts)
+
+            # Query recent memories
+            max_results = max_results or self.max_retrievals
+            results = self.table.search().where(filter_condition).limit(max_results).to_list()
+
+            # Format and sort by timestamp (newest first)
+            memories = []
+            for result in results:
+                memory = {
+                    "id": result["id"],
+                    "text": result["text"],
+                    "timestamp": result["timestamp"],
+                    "memory_type": result["memory_type"],
+                    "speaker": result["speaker"],
+                    "metadata": json.loads(result["metadata"]) if result["metadata"] else {}
+                }
+                memories.append(memory)
+
+            memories.sort(key=lambda x: x["timestamp"], reverse=True)
+            return memories
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to get recent memories: {e}")
+            return []
+
+    def clear_memory(self, memory_type: str | None = None) -> bool:
+        """
+        Clear memories, optionally filtered by type.
+
+        Args:
+            memory_type: Specific memory type to clear (None for all)
+
+        Returns:
+            True if successful
+        """
+        if not self.enable_memory:
+            return True
+
+        try:
+            if memory_type:
+                self.table.delete(f"memory_type = '{memory_type}'")
+                logger.info(f"Memory Core: Cleared {memory_type} memories")
+            else:
+                # Clear entire table
+                self.table.delete("timestamp > 0")
+                logger.info("Memory Core: Cleared all memories")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to clear memory: {e}")
+            return False
+
+    def get_memory_stats(self) -> dict[str, Any]:
+        """Get statistics about stored memories."""
+        if not self.enable_memory:
+            return {"enabled": False}
+
+        try:
+            # Count total memories
+            total_count = self.table.count_rows()
+
+            # Count by type
+            type_counts = {}
+            speaker_counts = {}
+
+            if total_count > 0:
+                all_memories = self.table.search().limit(total_count).to_list()
+
+                for memory in all_memories:
+                    mem_type = memory["memory_type"]
+                    speaker = memory["speaker"]
+
+                    type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
+                    speaker_counts[speaker] = speaker_counts.get(speaker, 0) + 1
+
+            return {
+                "enabled": True,
+                "total_memories": total_count,
+                "by_type": type_counts,
+                "by_speaker": speaker_counts,
+                "embedding_model": self.encoder.get_model_name(),
+                "embedding_dimension": self.embedding_dim
+            }
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to get stats: {e}")
+            return {"enabled": True, "error": str(e)}
+
+    def format_context_for_llm(self, memories: list[dict[str, Any]]) -> str:
+        """
+        Format retrieved memories as context for LLM prompt.
+
+        Args:
+            memories: List of memory dictionaries
+
+        Returns:
+            Formatted context string
+        """
+        if not memories:
+            return ""
+
+        context_parts = ["Previous relevant context:"]
+
+        for memory in memories[:self.max_retrievals]:  # Limit context size
+            speaker = memory["speaker"]
+            text = memory["text"]
+            memory_type = memory["memory_type"]
+
+            # Format based on memory type and speaker
+            if speaker == "user":
+                context_parts.append(f"User previously said: \"{text}\"")
+            elif speaker == "assistant":
+                context_parts.append(f"You previously responded: \"{text}\"")
+            elif memory_type == "semantic":
+                context_parts.append(f"Important fact: {text}")
+            else:
+                context_parts.append(f"{speaker.title()}: \"{text}\"")
+
+        return "\n".join(context_parts)
