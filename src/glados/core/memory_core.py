@@ -149,7 +149,9 @@ class MemoryCore:
         text: str,
         memory_type: str = "episodic",
         speaker: str = "user",
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
+        deduplicate: bool = True,
+        similarity_threshold: float = 0.95
     ) -> str:
         """
         Store a new memory entry.
@@ -159,6 +161,8 @@ class MemoryCore:
             memory_type: Type of memory (episodic, semantic, procedural)
             speaker: Who said/did this (user, assistant, system)
             metadata: Additional metadata dictionary
+            deduplicate: Skip storage if very similar memory exists
+            similarity_threshold: Threshold for deduplication (0.95 = 95% similar)
 
         Returns:
             The memory ID if successful, empty string if failed
@@ -167,6 +171,13 @@ class MemoryCore:
             return ""
 
         try:
+            # Check for duplicates if enabled
+            if deduplicate:
+                existing = self.retrieve_memories(text, max_results=1)
+                if existing and existing[0]["similarity"] >= similarity_threshold:
+                    logger.debug(f"Memory Core: Skipping duplicate (similarity={existing[0]['similarity']:.2f}): {text[:50]}...")
+                    return existing[0]["id"]  # Return existing ID
+
             # Generate embedding
             embedding = self.embed_text(text)
             if not embedding:
@@ -265,8 +276,19 @@ class MemoryCore:
                     }
                     relevant_memories.append(memory)
 
-            # Sort by similarity (highest first)
-            relevant_memories.sort(key=lambda x: x["similarity"], reverse=True)
+            # Sort by hybrid score: similarity + recency boost
+            # Only boost episodic memories (semantic/procedural are timeless facts)
+            import time
+            current_time = time.time()
+            for mem in relevant_memories:
+                if mem["memory_type"] == "episodic":
+                    age_hours = (current_time - mem["timestamp"]) / 3600
+                    recency_boost = max(0, 0.1 * (1 - min(age_hours / 168, 1)))  # Decay over 1 week
+                else:
+                    recency_boost = 0  # No boost for semantic/procedural facts
+                mem["hybrid_score"] = mem["similarity"] + recency_boost
+
+            relevant_memories.sort(key=lambda x: x["hybrid_score"], reverse=True)
 
             if relevant_memories:
                 logger.debug(f"Memory Core: Retrieved {len(relevant_memories)} memories for query: {query[:50]}...")
