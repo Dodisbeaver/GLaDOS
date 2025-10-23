@@ -234,7 +234,8 @@ class SpeechListener:
         clear_phrases = [
             "clear memory", "clear conversation", "reset conversation",
             "forget everything", "forget our conversation", "start over",
-            "clear history", "reset memory", "new conversation"
+            "clear history", "reset memory", "new conversation",
+            "forget the past", "wipe memory", "memory reset"
         ]
 
         # Check if any clear phrase is in the text
