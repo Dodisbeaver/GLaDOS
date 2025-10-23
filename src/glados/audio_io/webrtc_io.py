@@ -240,7 +240,7 @@ class WebRTCAudioIO:
                     logger.debug(f"Starting chunked audio: {num_chunks} chunks")
 
                     all_chunks_sent = True
-                    # Send audio in chunks
+                    # Send audio in chunks with adaptive timing
                     for chunk_idx in range(num_chunks):
                         if not self._is_playing:
                             logger.info("Playback stopped, cancelling remaining chunks")
@@ -258,11 +258,18 @@ class WebRTCAudioIO:
                         }
 
                         chunk_json = json.dumps(chunk_message)
-                        await self._websocket.send(chunk_json)
-                        logger.debug(f"Sent chunk {chunk_idx + 1}/{num_chunks} ({len(chunk_json)} bytes)")
 
-                        # Small delay between chunks for flow control (~10ms)
-                        await asyncio.sleep(0.01)
+                        # Track send timing for adaptive flow control
+                        send_start = asyncio.get_event_loop().time()
+                        await self._websocket.send(chunk_json)
+                        send_duration = asyncio.get_event_loop().time() - send_start
+
+                        logger.debug(f"Sent chunk {chunk_idx + 1}/{num_chunks} ({len(chunk_json)} bytes, {send_duration*1000:.1f}ms)")
+
+                        # Adaptive delay: wait at least as long as the send took, min 5ms, max 50ms
+                        # This prevents overwhelming slow connections while keeping latency low
+                        adaptive_delay = max(0.005, min(send_duration * 1.5, 0.050))
+                        await asyncio.sleep(adaptive_delay)
 
                     if all_chunks_sent and self._is_playing:
                         end_message = {"type": "audio_end"}
