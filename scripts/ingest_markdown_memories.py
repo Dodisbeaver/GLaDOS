@@ -135,8 +135,18 @@ def load_config(config_path: Optional[str] = None) -> dict:
     with open(config_file) as f:
         config = yaml.safe_load(f)
 
-    # Extract memory-related config
-    return config.get('memory', {})
+    # Extract memory-related config from Glados section
+    glados_config = config.get('Glados', {})
+
+    # Map memory_* keys to what MemoryCore expects
+    return {
+        'embedding_provider': glados_config.get('memory_embedding_provider', 'sentence_transformers'),
+        'embedding_model': glados_config.get('memory_embedding_model', 'all-MiniLM-L6-v2'),
+        'ollama_url': glados_config.get('memory_ollama_url'),
+        'max_retrievals': glados_config.get('memory_max_retrievals', 5),
+        'similarity_threshold': glados_config.get('memory_similarity_threshold', 0.7),
+        'auto_select_provider': glados_config.get('memory_auto_select_provider', False),
+    }
 
 
 def ingest_markdown_files(
@@ -182,6 +192,11 @@ def ingest_markdown_files(
     if not dry_run:
         logger.info("Initializing MemoryCore...")
 
+        # Build kwargs for embedding provider
+        embedding_kwargs = {}
+        if mem_config.get('ollama_url'):
+            embedding_kwargs['ollama_url'] = mem_config['ollama_url']
+
         memory = MemoryCore(
             memory_path=memory_path,
             embedding_model=mem_config.get('embedding_model', 'all-MiniLM-L6-v2'),
@@ -190,6 +205,7 @@ def ingest_markdown_files(
             similarity_threshold=mem_config.get('similarity_threshold', 0.7),
             enable_memory=True,
             auto_select_provider=mem_config.get('auto_select_provider', False),
+            **embedding_kwargs
         )
 
         if not memory.enable_memory:
