@@ -27,10 +27,11 @@ COPY models/ ./src_models/
 COPY docker/glados-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-RUN mkdir -p /app/models
+RUN mkdir -p /app/models /tmp && chmod 1777 /tmp
 VOLUME ["/app/models"]
 
 ENV GLADOS_CONFIG_PATH=/app/configs/glados_config.yaml
+ENV TMPDIR=/tmp
 ENV GLADOS_MODELS_PATH=/app/models
 ENV GLADOS_AUDIO_IO=webrtc
 
