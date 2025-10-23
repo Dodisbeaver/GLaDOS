@@ -404,25 +404,45 @@
                     });
 
                     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-                    this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
 
-                    this.processor.onaudioprocess = (event) => {
-                        if (this.isRecording && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                            const inputData = event.inputBuffer.getChannelData(0);
+                    // Try to use AudioWorklet (modern API), fall back to ScriptProcessor (deprecated)
+                    if (this.audioContext.audioWorklet) {
+                        try {
+                            // Load the audio worklet module
+                            await this.audioContext.audioWorklet.addModule('audio-bridge-worklet.js');
 
-                            // Send audio data to GLaDOS via proxy
-                            this.websocket.send(JSON.stringify({
-                                type: 'audio_data',
-                                samples: Array.from(inputData)
-                            }));
+                            // Create the worklet node
+                            this.processor = new AudioWorkletNode(this.audioContext, 'audio-bridge-processor');
 
-                            // Update visualizer
-                            this.updateVisualizer(inputData);
+                            // Handle messages from the worklet
+                            this.processor.port.onmessage = (event) => {
+                                if (event.data.type === 'audio_data' && this.isRecording &&
+                                    this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                                    const inputData = event.data.samples;
+
+                                    // Send audio data to GLaDOS via proxy
+                                    this.websocket.send(JSON.stringify({
+                                        type: 'audio_data',
+                                        samples: Array.from(inputData)
+                                    }));
+
+                                    // Update visualizer
+                                    this.updateVisualizer(inputData);
+                                }
+                            };
+
+                            source.connect(this.processor);
+                            this.processor.connect(this.audioContext.destination);
+
+                            console.log('Using AudioWorklet for audio processing');
+                        } catch (workletError) {
+                            console.warn('AudioWorklet failed, falling back to ScriptProcessor:', workletError);
+                            this.setupScriptProcessor(source);
                         }
-                    };
-
-                    source.connect(this.processor);
-                    this.processor.connect(this.audioContext.destination);
+                    } else {
+                        console.warn('AudioWorklet not supported, using deprecated ScriptProcessor');
+                        this.setupScriptProcessor(source);
+                    }
 
                     this.isRecording = true;
                     this.micButton.classList.add('active');
@@ -433,6 +453,29 @@
                     console.error('Error starting recording:', error);
                     this.updateStatus('Microphone access denied', true);
                 }
+            }
+
+            setupScriptProcessor(source) {
+                // Fallback to deprecated ScriptProcessor for legacy browsers
+                this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+
+                this.processor.onaudioprocess = (event) => {
+                    if (this.isRecording && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                        const inputData = event.inputBuffer.getChannelData(0);
+
+                        // Send audio data to GLaDOS via proxy
+                        this.websocket.send(JSON.stringify({
+                            type: 'audio_data',
+                            samples: Array.from(inputData)
+                        }));
+
+                        // Update visualizer
+                        this.updateVisualizer(inputData);
+                    }
+                };
+
+                source.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
             }
 
             stopRecording() {
