@@ -21,33 +21,34 @@ WORKDIR /app
 # Copy dependency files first for better layer caching
 COPY pyproject.toml README.md ./
 
+# Create non-root user early for package installation
+FROM base AS base-with-user
+RUN useradd -m -u 1000 glados && \
+    chown -R glados:glados /app
+
+USER glados
+
 # Build stage for CPU variant
-FROM base AS cpu-variant
+FROM base-with-user AS cpu-variant
 RUN uv sync --extra cpu --no-dev
 
 # Build stage for GPU variant
-FROM base AS gpu-variant
+FROM base-with-user AS gpu-variant
 RUN uv sync --extra cuda --no-dev
 
 # Copy source code AFTER dependency installation (better caching)
 FROM ${RUNTIME}-variant AS with-source
-COPY src/ ./src/
-COPY configs/ ./configs/
-COPY data/ ./data/
-COPY models/ ./src_models/
+COPY --chown=glados:glados src/ ./src/
+COPY --chown=glados:glados configs/ ./configs/
+COPY --chown=glados:glados data/ ./data/
+COPY --chown=glados:glados models/ ./src_models/
 
 # Final stage - use build arg to select variant
 FROM with-source AS final
 
-# Create non-root user for security
-RUN useradd -m -u 1000 glados
-
-# Create models directory and set ownership
-RUN mkdir -p /app/models && chown -R glados:glados /app/models
+# Create directories
+RUN mkdir -p /app/models /app/data
 VOLUME ["/app/models"]
-
-# Switch to non-root user
-USER glados
 
 # Copy entrypoint script
 COPY --chown=glados:glados docker/glados-entrypoint.sh /entrypoint.sh
