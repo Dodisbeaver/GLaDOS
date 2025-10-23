@@ -20,6 +20,7 @@ services:
       - glados-models:/app/models
       - ./data/memory:/app/data/memory          # Host directory for persistent vector DB
       - ./knowledge:/app/knowledge              # Host directory for markdown files (read-write for future web UI)
+      - ./scripts:/app/scripts:ro               # Scripts for ingestion and utilities
       - ./configs:/app/configs:ro               # Read-only configs
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/api/chat}
