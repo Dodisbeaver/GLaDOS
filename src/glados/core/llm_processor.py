@@ -223,13 +223,18 @@ class LanguageModelProcessor:
                 # This prevents the just-stored message from being the top hit
                 memory_context = ""
                 if self.memory_core:
+                    logger.info(f"LLM Processor: Retrieving memories for query: '{detected_text[:100]}...'")
                     relevant_memories = self.memory_core.retrieve_memories(
                         query=detected_text,
                         memory_types=["episodic", "semantic", "procedural"]
                     )
                     if relevant_memories:
                         memory_context = self.memory_core.format_context_for_llm(relevant_memories)
-                        logger.debug(f"LLM Processor: Retrieved {len(relevant_memories)} relevant memories")
+                        logger.success(f"LLM Processor: Retrieved {len(relevant_memories)} relevant memories")
+                        for i, mem in enumerate(relevant_memories[:3], 1):
+                            logger.info(f"  Memory {i}: [{mem['memory_type']}] similarity={mem['similarity']:.3f} - {mem['text'][:100]}...")
+                    else:
+                        logger.warning(f"LLM Processor: No relevant memories found (threshold={self.memory_core.similarity_threshold})")
 
                 # Store user input in memory if enabled (after retrieval)
                 if self.memory_core and self.store_user_inputs:
