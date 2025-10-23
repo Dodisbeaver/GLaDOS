@@ -239,10 +239,12 @@ class WebRTCAudioIO:
                     await self._websocket.send(json.dumps(start_message))
                     logger.debug(f"Starting chunked audio: {num_chunks} chunks")
 
+                    all_chunks_sent = True
                     # Send audio in chunks
                     for chunk_idx in range(num_chunks):
                         if not self._is_playing:
                             logger.info("Playback stopped, cancelling remaining chunks")
+                            all_chunks_sent = False
                             break
 
                         start_idx = chunk_idx * self.CHUNK_SIZE
@@ -262,13 +264,15 @@ class WebRTCAudioIO:
                         # Small delay between chunks for flow control (~10ms)
                         await asyncio.sleep(0.01)
 
-                    # Send end message
-                    end_message = {"type": "audio_end"}
-                    await self._websocket.send(json.dumps(end_message))
-                    logger.debug("Audio transmission complete")
+                    if all_chunks_sent and self._is_playing:
+                        end_message = {"type": "audio_end"}
+                        await self._websocket.send(json.dumps(end_message))
+                        logger.debug("Audio transmission complete")
 
                 except Exception as e:
                     logger.error(f"Failed to send chunked audio to proxy: {e}")
+                finally:
+                    self._is_playing = False
 
             # Use thread-safe scheduling to the client's event loop
             try:
