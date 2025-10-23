@@ -449,3 +449,236 @@ class MemoryCore:
                 context_parts.append(f"{speaker.title()}: \"{text}\"")
 
         return "\n".join(context_parts)
+
+    def find_duplicate_clusters(
+        self,
+        similarity_threshold: float = 0.90,
+        batch_size: int = 100
+    ) -> list[list[dict[str, Any]]]:
+        """
+        Find clusters of duplicate or near-duplicate memories.
+
+        Args:
+            similarity_threshold: Threshold for considering memories duplicates
+            batch_size: Number of memories to process at once
+
+        Returns:
+            List of clusters, where each cluster is a list of duplicate memories
+        """
+        if not self.enable_memory:
+            return []
+
+        try:
+            # Get all memories
+            total_count = self.table.count_rows()
+            if total_count == 0:
+                return []
+
+            logger.info(f"Memory Core: Scanning {total_count} memories for duplicates...")
+
+            all_memories = self.table.search().limit(total_count).to_list()
+
+            # Build clusters using similarity search
+            clusters = []
+            processed_ids = set()
+
+            for i, memory in enumerate(all_memories):
+                if memory["id"] in processed_ids:
+                    continue
+
+                # Search for similar memories
+                similar = self.retrieve_memories(
+                    query=memory["text"],
+                    max_results=50,  # Check up to 50 similar items
+                    exclude_ids=list(processed_ids)
+                )
+
+                # Filter by threshold and exclude self
+                duplicates = [
+                    mem for mem in similar
+                    if mem["id"] != memory["id"] and mem["similarity"] >= similarity_threshold
+                ]
+
+                if duplicates:
+                    # Create cluster with original + duplicates
+                    cluster = [memory] + duplicates
+                    clusters.append(cluster)
+
+                    # Mark all as processed
+                    processed_ids.add(memory["id"])
+                    for dup in duplicates:
+                        processed_ids.add(dup["id"])
+
+                # Progress logging
+                if (i + 1) % batch_size == 0:
+                    logger.debug(f"Memory Core: Processed {i + 1}/{total_count} memories...")
+
+            logger.info(f"Memory Core: Found {len(clusters)} duplicate clusters")
+            return clusters
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to find duplicates: {e}")
+            return []
+
+    def deduplicate_memories(
+        self,
+        similarity_threshold: float = 0.90,
+        strategy: str = "keep_newest",
+        dry_run: bool = False
+    ) -> dict[str, Any]:
+        """
+        Remove duplicate memories from the database.
+
+        Args:
+            similarity_threshold: Threshold for considering memories duplicates (0.90 = 90% similar)
+            strategy: How to choose which duplicate to keep:
+                - "keep_newest": Keep the most recent memory
+                - "keep_oldest": Keep the earliest memory
+                - "keep_longest": Keep the memory with most text
+            dry_run: If True, only report what would be deleted without deleting
+
+        Returns:
+            Dictionary with deduplication statistics
+        """
+        if not self.enable_memory:
+            return {"enabled": False}
+
+        try:
+            # Find duplicate clusters
+            clusters = self.find_duplicate_clusters(similarity_threshold=similarity_threshold)
+
+            if not clusters:
+                logger.info("Memory Core: No duplicates found")
+                return {
+                    "clusters_found": 0,
+                    "memories_removed": 0,
+                    "memories_kept": 0,
+                    "dry_run": dry_run
+                }
+
+            memories_to_remove = []
+            memories_kept = []
+
+            for cluster in clusters:
+                # Choose which memory to keep based on strategy
+                if strategy == "keep_newest":
+                    keeper = max(cluster, key=lambda m: m.get("timestamp", 0))
+                elif strategy == "keep_oldest":
+                    keeper = min(cluster, key=lambda m: m.get("timestamp", float("inf")))
+                elif strategy == "keep_longest":
+                    keeper = max(cluster, key=lambda m: len(m.get("text", "")))
+                else:
+                    logger.warning(f"Unknown strategy '{strategy}', using 'keep_newest'")
+                    keeper = max(cluster, key=lambda m: m.get("timestamp", 0))
+
+                memories_kept.append(keeper)
+
+                # Mark others for removal
+                for mem in cluster:
+                    if mem["id"] != keeper["id"]:
+                        memories_to_remove.append(mem)
+
+            # Perform deletion if not dry run
+            removed_count = 0
+            if not dry_run and memories_to_remove:
+                for mem in memories_to_remove:
+                    try:
+                        self.table.delete(f"id = '{mem['id']}'")
+                        removed_count += 1
+                    except Exception as e:
+                        logger.error(f"Memory Core: Failed to delete {mem['id']}: {e}")
+
+                logger.success(f"Memory Core: Removed {removed_count} duplicate memories")
+            else:
+                removed_count = len(memories_to_remove)
+                logger.info(f"Memory Core: [DRY RUN] Would remove {removed_count} duplicate memories")
+
+            # Prepare detailed report
+            stats = {
+                "clusters_found": len(clusters),
+                "memories_removed": removed_count,
+                "memories_kept": len(memories_kept),
+                "dry_run": dry_run,
+                "strategy": strategy,
+                "threshold": similarity_threshold
+            }
+
+            # Add sample duplicates for inspection
+            if dry_run and clusters:
+                stats["sample_clusters"] = []
+                for cluster in clusters[:3]:  # Show first 3 clusters
+                    stats["sample_clusters"].append([
+                        {
+                            "id": m["id"],
+                            "text": m["text"][:100] + "..." if len(m["text"]) > 100 else m["text"],
+                            "timestamp": datetime.fromtimestamp(m.get("timestamp", 0)).isoformat(),
+                            "similarity": m.get("similarity", 1.0)
+                        }
+                        for m in cluster
+                    ])
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to deduplicate: {e}")
+            return {"error": str(e)}
+
+    def consolidate_old_memories(
+        self,
+        days_threshold: int = 30,
+        similarity_threshold: float = 0.85,
+        dry_run: bool = False
+    ) -> dict[str, Any]:
+        """
+        Consolidate old episodic memories that are similar into single entries.
+
+        This helps reduce memory clutter for frequently discussed topics.
+
+        Args:
+            days_threshold: Only consolidate memories older than this many days
+            similarity_threshold: Threshold for grouping similar memories
+            dry_run: If True, only report what would be consolidated
+
+        Returns:
+            Dictionary with consolidation statistics
+        """
+        if not self.enable_memory:
+            return {"enabled": False}
+
+        try:
+            cutoff_time = time.time() - (days_threshold * 86400)
+
+            # Get old episodic memories
+            old_memories = []
+            all_memories = self.table.search().where(
+                f"timestamp < {cutoff_time} AND memory_type = 'episodic'"
+            ).limit(10000).to_list()
+
+            for mem in all_memories:
+                old_memories.append({
+                    "id": mem["id"],
+                    "text": mem["text"],
+                    "timestamp": mem["timestamp"],
+                    "memory_type": mem["memory_type"],
+                    "speaker": mem["speaker"],
+                    "metadata": json.loads(mem["metadata"]) if mem["metadata"] else {}
+                })
+
+            if not old_memories:
+                logger.info(f"Memory Core: No episodic memories older than {days_threshold} days")
+                return {"consolidated": 0, "removed": 0, "dry_run": dry_run}
+
+            logger.info(f"Memory Core: Found {len(old_memories)} old episodic memories to consider")
+
+            # Find similar clusters among old memories
+            consolidated = 0
+            removed = 0
+
+            # This would need more sophisticated implementation for production
+            # For now, just use the existing deduplication on old memories
+            logger.info("Memory Core: Consolidation uses same logic as deduplication")
+            return {"note": "Use deduplicate_memories() for old memory cleanup"}
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to consolidate: {e}")
+            return {"error": str(e)}
