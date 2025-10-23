@@ -197,6 +197,10 @@
                 this.audioChunks = [];
                 this.chunkMetadata = null;
                 this.receivedChunks = 0;
+                this.endReceived = false;
+                this.playbackQueue = [];
+                this.isProcessingPlayback = false;
+                this.queueAbortRequested = false;
 
                 this.micButton = document.getElementById('micButton');
                 this.statusText = document.getElementById('statusText');
@@ -326,12 +330,12 @@
                         break;
 
                     case 'audio_end':
-                        // End of chunked audio, play complete audio
-                        this.playChunkedAudio();
+                        // End of chunked audio, enqueue for playback when complete
+                        this.finalizeChunkedAudio();
                         break;
 
                     case 'stop_playback':
-                        this.stopAudio();
+                        this.handleStopPlayback();
                         break;
                 }
             }
@@ -341,6 +345,7 @@
                 this.chunkMetadata = metadata;
                 this.audioChunks = new Array(metadata.num_chunks);
                 this.receivedChunks = 0;
+                this.endReceived = false;
                 this.updateStatus(`Receiving audio: ${metadata.text}`);
             }
 
@@ -354,26 +359,20 @@
                 this.receivedChunks++;
 
                 console.log(`Received chunk ${this.receivedChunks}/${this.chunkMetadata.num_chunks}`);
+
+                if (this.endReceived) {
+                    this.maybeQueueChunkedAudio();
+                }
             }
 
-            async playChunkedAudio() {
-                if (!this.chunkMetadata || this.receivedChunks !== this.chunkMetadata.num_chunks) {
-                    console.error('Incomplete chunked audio received');
+            finalizeChunkedAudio() {
+                if (!this.chunkMetadata) {
+                    console.error('Received audio_end without metadata');
                     return;
                 }
 
-                // Concatenate all chunks
-                const allSamples = this.audioChunks.flat();
-                const duration = (allSamples.length / this.chunkMetadata.sample_rate).toFixed(2);
-                console.log(`Playing ${allSamples.length} samples (${duration}s)`);
-
-                // Play concatenated audio
-                await this.playAudio(allSamples, this.chunkMetadata.sample_rate, this.chunkMetadata.text);
-
-                // Reset state
-                this.audioChunks = [];
-                this.chunkMetadata = null;
-                this.receivedChunks = 0;
+                this.endReceived = true;
+                this.maybeQueueChunkedAudio();
             }
 
             async toggleRecording() {
@@ -459,10 +458,13 @@
                 this.updateStatus('Stopped listening');
             }
 
-            async playAudio(samples, sampleRate, text) {
+            async playAudio(samples, sampleRate, text, interruptCurrent = true) {
                 try {
-                    // Ensure any existing playback is stopped before starting new audio
-                    this.stopAudio();
+                    if (interruptCurrent) {
+                        this.stopAudio(false);
+                        this.clearPlaybackQueue();
+                        this.queueAbortRequested = false;
+                    }
 
                     this.playbackContext = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -491,7 +493,7 @@
                 }
             }
 
-            stopAudio() {
+            stopAudio(updateStatus = true) {
                 if (this.playbackSource) {
                     try {
                         this.playbackSource.stop();
@@ -510,7 +512,9 @@
 
                 this.playbackSource = null;
                 this.playbackContext = null;
-                this.updateStatus('Audio playback stopped');
+                if (updateStatus) {
+                    this.updateStatus('Audio playback stopped');
+                }
             }
 
             cleanupPlayback() {
@@ -524,6 +528,113 @@
 
                 this.playbackSource = null;
                 this.playbackContext = null;
+            }
+
+            maybeQueueChunkedAudio() {
+                if (!this.chunkMetadata) {
+                    return;
+                }
+
+                // Only queue if we have end signal OR if we have all chunks
+                if (!this.endReceived && this.receivedChunks !== this.chunkMetadata.num_chunks) {
+                    return;
+                }
+
+                const { sample_rate: sampleRate, text, total_samples: totalSamples, num_chunks: expectedChunks } = this.chunkMetadata;
+
+                // Count received chunks (handle missing chunks gracefully)
+                const actualChunks = this.audioChunks.filter(chunk => chunk !== undefined && chunk !== null).length;
+
+                if (actualChunks === 0) {
+                    console.error('No audio chunks received, skipping playback');
+                    this.resetChunkAssembly();
+                    return;
+                }
+
+                // Warn if we're missing chunks
+                if (actualChunks < expectedChunks) {
+                    console.warn(`Missing ${expectedChunks - actualChunks} chunk(s), playing partial audio (${actualChunks}/${expectedChunks})`);
+                }
+
+                // Merge available chunks (skip null/undefined)
+                const totalLength = typeof totalSamples === 'number' && totalSamples > 0
+                    ? totalSamples
+                    : this.audioChunks.reduce((sum, chunk) => sum + (chunk?.length || 0), 0);
+
+                const merged = new Float32Array(totalLength);
+                let offset = 0;
+                for (const chunk of this.audioChunks) {
+                    if (!chunk) {
+                        continue;
+                    }
+                    const asFloat32 = Float32Array.from(chunk);
+                    merged.set(asFloat32, offset);
+                    offset += asFloat32.length;
+                }
+
+                const samples = offset < merged.length ? merged.subarray(0, offset) : merged;
+                const duration = (samples.length / sampleRate).toFixed(2);
+                const completeness = ((actualChunks / expectedChunks) * 100).toFixed(1);
+                console.log(`Queueing ${samples.length} samples (${duration}s, ${completeness}% complete) for playback`);
+
+                this.playbackQueue.push({
+                    samples,
+                    sampleRate,
+                    text,
+                });
+
+                this.resetChunkAssembly();
+                this.processPlaybackQueue();
+            }
+
+            resetChunkAssembly() {
+                this.audioChunks = [];
+                this.chunkMetadata = null;
+                this.receivedChunks = 0;
+                this.endReceived = false;
+            }
+
+            clearPlaybackQueue() {
+                this.playbackQueue = [];
+            }
+
+            async processPlaybackQueue() {
+                if (this.isProcessingPlayback) {
+                    return;
+                }
+
+                this.isProcessingPlayback = true;
+
+                try {
+                    while (this.playbackQueue.length > 0) {
+                        if (this.queueAbortRequested) {
+                            console.log('Playback queue aborted');
+                            this.queueAbortRequested = false;
+                            this.clearPlaybackQueue();
+                            break;
+                        }
+
+                        const nextItem = this.playbackQueue.shift();
+                        if (!nextItem) {
+                            continue;
+                        }
+
+                        try {
+                            await this.playAudio(nextItem.samples, nextItem.sampleRate, nextItem.text, false);
+                        } catch (error) {
+                            console.error('Error playing queued audio:', error);
+                        }
+                    }
+                } finally {
+                    this.isProcessingPlayback = false;
+                }
+            }
+
+            handleStopPlayback() {
+                this.queueAbortRequested = true;
+                this.clearPlaybackQueue();
+                this.resetChunkAssembly();
+                this.stopAudio();
             }
 
             updateStatus(message, isError = false) {
