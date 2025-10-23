@@ -11,6 +11,7 @@ import queue
 import sys
 import threading
 import time
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, HttpUrl
@@ -23,6 +24,7 @@ from ..utils import spoken_text_converter as stc
 from ..utils.resources import resource_path
 from .audio_data import AudioMessage
 from .llm_processor import LanguageModelProcessor
+from .memory_core import MemoryCore
 from .speech_listener import SpeechListener
 from .speech_player import SpeechPlayer
 from .tts_synthesizer import TextToSpeechSynthesizer
@@ -84,6 +86,22 @@ class GladosConfig(BaseModel):
     asr_pause_limit: int = 1800  # Milliseconds of pause before processing speech
     asr_vad_threshold: float = 0.6  # VAD sensitivity threshold (0.0-1.0)
 
+    # Memory Core Configuration
+    memory_enabled: bool = True
+    memory_path: str = "/app/data/memory"
+    memory_embedding_provider: str = "sentence_transformers"
+    memory_embedding_model: str = "all-MiniLM-L6-v2"
+    memory_auto_select_provider: bool = False
+    memory_max_retrievals: int = 5
+    memory_similarity_threshold: float = 0.7
+    memory_store_assistant_responses: bool = True
+    memory_store_user_inputs: bool = True
+    memory_gemma_prompt_name: str | None = None
+    memory_gemma_truncate_dim: int | None = None
+    memory_ollama_url: str | None = None
+    memory_ollama_auto_pull: bool = True
+    memory_ollama_max_retries: int = 3
+
     @classmethod
     def from_yaml(cls, path: str | Path, key_to_config: tuple[str, ...] = ("Glados",)) -> "GladosConfig":
         """
@@ -129,20 +147,32 @@ class GladosConfig(BaseModel):
             "GLADOS_WAKE_WORD": "wake_word",
             "GLADOS_ANNOUNCEMENT": "announcement",
             "GLADOS_ASR_PAUSE_LIMIT": "asr_pause_limit",
-            "GLADOS_ASR_VAD_THRESHOLD": "asr_vad_threshold"
+            "GLADOS_ASR_VAD_THRESHOLD": "asr_vad_threshold",
+            "GLADOS_MEMORY_ENABLED": "memory_enabled",
+            "GLADOS_MEMORY_PATH": "memory_path",
+            "GLADOS_MEMORY_EMBEDDING_PROVIDER": "memory_embedding_provider",
+            "GLADOS_MEMORY_EMBEDDING_MODEL": "memory_embedding_model",
+            "GLADOS_MEMORY_AUTO_SELECT_PROVIDER": "memory_auto_select_provider",
+            "GLADOS_MEMORY_MAX_RETRIEVALS": "memory_max_retrievals",
+            "GLADOS_MEMORY_SIMILARITY_THRESHOLD": "memory_similarity_threshold",
+            "GLADOS_MEMORY_GEMMA_PROMPT_NAME": "memory_gemma_prompt_name",
+            "GLADOS_MEMORY_GEMMA_TRUNCATE_DIM": "memory_gemma_truncate_dim",
+            "GLADOS_MEMORY_OLLAMA_URL": "memory_ollama_url",
+            "GLADOS_MEMORY_OLLAMA_AUTO_PULL": "memory_ollama_auto_pull",
+            "GLADOS_MEMORY_OLLAMA_MAX_RETRIES": "memory_ollama_max_retries",
         }
 
         for env_var, config_key in env_overrides.items():
             env_value = os.getenv(env_var)
             if env_value is not None:
-                # Handle boolean conversion for interruptible
-                if config_key == "interruptible":
+                # Handle boolean conversion
+                if config_key in ("interruptible", "memory_enabled", "memory_auto_select_provider", "memory_ollama_auto_pull"):
                     config[config_key] = env_value.lower() in ("true", "1", "yes", "on")
-                # Handle integer conversion for ASR pause limit
-                elif config_key == "asr_pause_limit":
-                    config[config_key] = int(env_value)
-                # Handle float conversion for VAD threshold
-                elif config_key == "asr_vad_threshold":
+                # Handle integer conversion
+                elif config_key in ("asr_pause_limit", "memory_max_retrievals", "memory_gemma_truncate_dim", "memory_ollama_max_retries"):
+                    config[config_key] = int(env_value) if env_value else None
+                # Handle float conversion
+                elif config_key in ("asr_vad_threshold", "memory_similarity_threshold"):
                     config[config_key] = float(env_value)
                 else:
                     config[config_key] = env_value
@@ -188,6 +218,7 @@ class Glados:
         personality_preprompt: tuple[dict[str, str], ...] = DEFAULT_PERSONALITY_PREPROMPT,
         asr_pause_limit: int | None = None,
         asr_vad_threshold: float | None = None,
+        memory_config: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize the Glados voice assistant with configuration parameters.
@@ -241,6 +272,40 @@ class Glados:
         self.audio_io: AudioProtocol = audio_io
         logger.info("Audio input started successfully.")
 
+        # Initialize Memory Core if configuration provided
+        self.memory_core: MemoryCore | None = None
+        if memory_config and memory_config.get("enabled", False):
+            try:
+                # Prepare provider-specific kwargs
+                embedding_kwargs = {}
+                # EmbeddingGemma-specific settings
+                if memory_config.get("prompt_name"):
+                    embedding_kwargs["prompt_name"] = memory_config["prompt_name"]
+                if memory_config.get("truncate_dim"):
+                    embedding_kwargs["truncate_dim"] = memory_config["truncate_dim"]
+                # Ollama-specific settings
+                if memory_config.get("ollama_url"):
+                    embedding_kwargs["ollama_url"] = memory_config["ollama_url"]
+                if "auto_pull" in memory_config:
+                    embedding_kwargs["auto_pull"] = memory_config["auto_pull"]
+                if "max_retries" in memory_config:
+                    embedding_kwargs["max_retries"] = memory_config["max_retries"]
+
+                self.memory_core = MemoryCore(
+                    memory_path=memory_config.get("path", "/app/data/memory"),
+                    embedding_model=memory_config.get("embedding_model", "all-MiniLM-L6-v2"),
+                    embedding_provider=memory_config.get("embedding_provider", "sentence_transformers"),
+                    max_retrievals=memory_config.get("max_retrievals", 5),
+                    similarity_threshold=memory_config.get("similarity_threshold", 0.7),
+                    enable_memory=memory_config.get("enabled", True),
+                    auto_select_provider=memory_config.get("auto_select_provider", False),
+                    **embedding_kwargs
+                )
+                logger.success("Memory Core initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Memory Core: {e}")
+                self.memory_core = None
+
         # Initialize threads for each component
         self.component_threads: list[threading.Thread] = []
 
@@ -267,6 +332,9 @@ class Glados:
             processing_active_event=self.processing_active_event,
             shutdown_event=self.shutdown_event,
             pause_time=self.PAUSE_TIME,
+            memory_core=self.memory_core,
+            store_user_inputs=memory_config.get("store_user_inputs", True) if memory_config else True,
+            store_assistant_responses=memory_config.get("store_assistant_responses", True) if memory_config else True,
         )
 
         self.tts_synthesizer = TextToSpeechSynthesizer(
@@ -353,6 +421,26 @@ class Glados:
 
         audio_io = get_audio_system(backend_type=config.audio_io, vad_threshold=config.asr_vad_threshold)
 
+        # Prepare memory configuration
+        memory_config = {
+            "enabled": config.memory_enabled,
+            "path": config.memory_path,
+            "embedding_provider": config.memory_embedding_provider,
+            "embedding_model": config.memory_embedding_model,
+            "auto_select_provider": config.memory_auto_select_provider,
+            "max_retrievals": config.memory_max_retrievals,
+            "similarity_threshold": config.memory_similarity_threshold,
+            "store_user_inputs": config.memory_store_user_inputs,
+            "store_assistant_responses": config.memory_store_assistant_responses,
+            # EmbeddingGemma-specific settings
+            "prompt_name": config.memory_gemma_prompt_name,
+            "truncate_dim": config.memory_gemma_truncate_dim,
+            # Ollama-specific settings
+            "ollama_url": config.memory_ollama_url,
+            "auto_pull": config.memory_ollama_auto_pull,
+            "max_retries": config.memory_ollama_max_retries,
+        }
+
         return cls(
             asr_model=asr_model,
             tts_model=tts_model,
@@ -366,6 +454,7 @@ class Glados:
             personality_preprompt=tuple(config.to_chat_messages()),
             asr_pause_limit=config.asr_pause_limit,
             asr_vad_threshold=config.asr_vad_threshold,
+            memory_config=memory_config,
         )
 
     @classmethod
