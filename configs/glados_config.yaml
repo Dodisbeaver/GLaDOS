@@ -40,7 +40,7 @@ Glados:
   # Response summarization (extract key facts before storing)
   memory_summarize_responses: true
   memory_summarizer_url: "http://ollama:11434/api/generate"
-  memory_summarizer_model: "gemma3:1b"
+  memory_summarizer_model: "granite4:micro-h"
 
   # EmbeddingGemma-specific settings
   memory_gemma_prompt_name: null  # Optional: "STS", "RAG", etc.
