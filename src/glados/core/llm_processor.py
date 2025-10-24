@@ -285,7 +285,7 @@ class LanguageModelProcessor:
                 self.summarizer_url,
                 headers={"Content-Type": "application/json"},
                 json=data,
-                timeout=5
+                timeout=15  # Increased timeout for larger models
             )
             response.raise_for_status()
 
