@@ -359,7 +359,7 @@ class Glados:
             store_assistant_responses=memory_config.get("store_assistant_responses", True) if memory_config else True,
             summarize_responses=memory_config.get("summarize_responses", False) if memory_config else False,
             summarizer_url=memory_config.get("summarizer_url") if memory_config else None,
-            summarizer_model=memory_config.get("summarizer_model", "gemma:2b") if memory_config else "gemma:2b",
+            summarizer_model=memory_config.get("summarizer_model", "gemma3:1b") if memory_config else "gemma3:1b",
         )
 
         self.tts_synthesizer = TextToSpeechSynthesizer(

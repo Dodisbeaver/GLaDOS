@@ -37,6 +37,9 @@ class LanguageModelProcessor:
         memory_core: MemoryCore | None = None,
         store_user_inputs: bool = True,
         store_assistant_responses: bool = True,
+        summarize_responses: bool = False,
+        summarizer_url: str | None = None,
+        summarizer_model: str = "gemma3:1b",
     ) -> None:
         self.llm_input_queue = llm_input_queue
         self.tts_input_queue = tts_input_queue
@@ -50,6 +53,9 @@ class LanguageModelProcessor:
         self.memory_core = memory_core
         self.store_user_inputs = store_user_inputs
         self.store_assistant_responses = store_assistant_responses
+        self.summarize_responses = summarize_responses
+        self.summarizer_url = summarizer_url or str(completion_url)  # Use main LLM URL if not specified
+        self.summarizer_model = summarizer_model
 
         self.prompt_headers = {"Content-Type": "application/json"}
 
@@ -181,6 +187,69 @@ class LanguageModelProcessor:
         if sentence and sentence != ".":  # Avoid sending just a period
             logger.info(f"LLM Processor: Sending to TTS queue: '{sentence}'")
             self.tts_input_queue.put(sentence)
+
+    def _summarize_for_memory(self, response_text: str) -> str:
+        """
+        Summarize assistant response into key facts for memory storage.
+        Uses a small, fast LLM (gemma3:1b) to extract only relevant information.
+
+        Args:
+            response_text: Full assistant response
+
+        Returns:
+            Summarized text containing only key facts, or original if summarization fails
+        """
+        if not self.summarize_responses or not response_text.strip():
+            return response_text
+
+        # If response is already short, don't summarize
+        if len(response_text.split()) <= 20:
+            return response_text
+
+        try:
+            logger.debug(f"LLM Processor: Summarizing response for memory storage")
+
+            # Prompt for fact extraction
+            summary_prompt = (
+                "Extract ONLY the key factual information from this response as a single concise sentence. "
+                "Remove sarcasm, jokes, filler words, and redundancy. If answering a question, state just the answer. "
+                "Maximum 20 words.\n\n"
+                f"Response: {response_text}\n\n"
+                "Key facts:"
+            )
+
+            data = {
+                "model": self.summarizer_model,
+                "prompt": summary_prompt,
+                "stream": False,  # Non-streaming for quick response
+                "options": {
+                    "temperature": 0.1,  # Low temperature for factual extraction
+                    "num_predict": 50,   # Limit tokens for speed
+                }
+            }
+
+            # Call summarizer LLM (typically Ollama)
+            response = requests.post(
+                self.summarizer_url,
+                headers={"Content-Type": "application/json"},
+                json=data,
+                timeout=5  # Fast timeout - summarization should be quick
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            summarized = result.get("response", "").strip()
+
+            if summarized and len(summarized) > 10:
+                logger.debug(f"LLM Processor: Summarized '{response_text[:50]}...' -> '{summarized}'")
+                return summarized
+            else:
+                logger.warning("LLM Processor: Summarization returned empty, using original")
+                return response_text
+
+        except Exception as e:
+            logger.warning(f"LLM Processor: Summarization failed: {e}, using original response")
+            return response_text
 
     def run(self) -> None:
         """
@@ -329,8 +398,11 @@ class LanguageModelProcessor:
 
                                 # Store assistant response in memory if enabled
                                 if self.memory_core and self.store_assistant_responses:
+                                    # Summarize response to extract key facts (if enabled)
+                                    text_to_store = self._summarize_for_memory(full_response)
+
                                     self.memory_core.store_memory(
-                                        text=full_response,
+                                        text=text_to_store,
                                         memory_type="episodic",
                                         speaker="assistant"
                                     )
