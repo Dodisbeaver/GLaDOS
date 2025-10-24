@@ -9,16 +9,10 @@ This guide covers deploying GLaDOS for various network configurations including 
    cp .env.example .env
    ```
 
-2. **Configure your network settings** in `.env`:
+2. **Fix file permissions (if host runs as root):**
    ```bash
-   # Set your server's LAN IP
-   SSL_LAN_IP=192.168.1.50
-
-   # Optional: Set external IP if port forwarding
-   SSL_EXTERNAL_IP=203.0.113.10
-
-   # Optional: Custom domains
-   SSL_DOMAINS=glados.mydomain.com,voice.mydomain.com
+   # Container runs as UID 1000, so fix ownership
+   chown -R 1000:1000 ./models ./data ./knowledge
    ```
 
 3. **Deploy:**
