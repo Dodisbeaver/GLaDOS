@@ -254,20 +254,21 @@ class LanguageModelProcessor:
 
             # Prompt for conversation summarization with semantic type classification
             summary_prompt = (
-                "You are a memory system. Extract the core fact AND classify its type.\n\n"
+                "You are a memory system. Extract information about the USER and classify it.\n\n"
+                "CRITICAL: If the user states a personal preference, opinion, or feeling - keep it as THEIRS.\n\n"
                 "Types:\n"
-                "- TASK: User needs to do something (todo, have to, need to, must do)\n"
-                "- REMINDER: User wants to remember something (remind me, don't forget)\n"
-                "- PREFERENCE: User's likes/dislikes (favorite, prefer, like, hate, love)\n"
-                "- FACT: General information (default)\n\n"
-                "What to ignore:\n"
-                "- Sarcasm, jokes, humor, personality quirks\n"
-                "- Filler words, politeness, conversational fluff\n\n"
-                f"User: {user_text}\n"
-                f"Assistant: {assistant_text}\n\n"
-                "Output format (two lines):\n"
+                "- TASK: User needs to do something → 'User needs to [action]'\n"
+                "- REMINDER: User wants to remember something → 'User must [action]'\n"
+                "- PREFERENCE: User's personal likes/dislikes → 'User likes/prefers/loves/hates [thing]'\n"
+                "- FACT: User states objective information → 'User is in [location]', 'User's birthday is [date]'\n\n"
+                "DO NOT convert personal statements into general facts!\n"
+                "BAD: 'Blue is a calming color' | GOOD: 'User's favorite color is blue'\n"
+                "BAD: 'Coffee is popular' | GOOD: 'User loves coffee'\n\n"
+                f"User says: {user_text}\n"
+                f"Assistant replies: {assistant_text}\n\n"
+                "Output (two lines):\n"
                 "TYPE: [task|reminder|preference|fact]\n"
-                "FACT: [factual statement, max 12 words]"
+                "FACT: [statement about the user, max 12 words]"
             )
 
             data = {
