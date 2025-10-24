@@ -306,6 +306,22 @@ class Glados:
                 logger.error(f"Failed to initialize Memory Core: {e}")
                 self.memory_core = None
 
+        # Add system message about memory status
+        if memory_config and memory_config.get("enabled", False):
+            if self.memory_core and self.memory_core.enable_memory:
+                memory_status_msg = (
+                    "SYSTEM STATUS: Your long-term memory system is online and functioning. "
+                    "You can recall past conversations and stored knowledge."
+                )
+            else:
+                memory_status_msg = (
+                    "SYSTEM STATUS: Your long-term memory system is currently OFFLINE. "
+                    "You can only remember this current conversation session. "
+                    "If users ask about past conversations or stored knowledge, "
+                    "inform them that your memory system is unavailable."
+                )
+            self._messages.append({"role": "system", "content": memory_status_msg})
+
         # Initialize threads for each component
         self.component_threads: list[threading.Thread] = []
 
