@@ -475,13 +475,32 @@ class MemoryCore:
 
         context_parts = ["Previous relevant context:"]
 
+        # Parse metadata to check for semantic types
+        import json
+
         for memory in memories[:self.max_retrievals]:  # Limit context size
             speaker = memory["speaker"]
             text = memory["text"]
             memory_type = memory["memory_type"]
 
-            # Format based on memory type and speaker
-            if speaker == "user":
+            # Parse metadata if present
+            metadata = memory.get('metadata', '{}')
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except:
+                    metadata = {}
+
+            semantic_type = metadata.get('semantic_type', '')
+
+            # Format based on semantic type first, then memory type and speaker
+            if semantic_type == 'task':
+                context_parts.append(f"ACTIVE TASK: {text}")
+            elif semantic_type == 'reminder':
+                context_parts.append(f"ACTIVE REMINDER: {text}")
+            elif semantic_type == 'preference':
+                context_parts.append(f"User preference: {text}")
+            elif speaker == "user":
                 context_parts.append(f"User previously said: \"{text}\"")
             elif speaker == "assistant":
                 context_parts.append(f"You previously responded: \"{text}\"")
