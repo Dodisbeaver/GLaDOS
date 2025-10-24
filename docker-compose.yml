@@ -5,7 +5,7 @@ services:
     ports:
       - '${TTS_PORT:-5050}:5050'
     volumes:
-      - glados-models:/app/models
+      - ./models:/app/models
     environment:
       - GLADOS_MODELS_PATH=/app/models
 
@@ -17,7 +17,7 @@ services:
       args:
         RUNTIME: ${GLADOS_RUNTIME:-cpu}  # cpu or cuda
     volumes:
-      - glados-models:/app/models
+      - ./models:/app/models
       - ./data/memory:/app/data/memory          # Host directory for persistent vector DB
       - ./knowledge:/app/knowledge              # Host directory for markdown files (read-write for future web UI)
       - ./scripts:/app/scripts:ro               # Scripts for ingestion and utilities
@@ -33,6 +33,7 @@ services:
     restart: unless-stopped
     networks:
       - default
+      - ollama-network  # Connect to external Ollama network
 
 
   # Audio Proxy Service (NEW - WebRTC approach)
@@ -77,3 +78,5 @@ volumes:
 networks:
   default:
     name: glados-network
+  ollama-network:
+    external: true  # Use existing Ollama network
