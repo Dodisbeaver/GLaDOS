@@ -365,21 +365,43 @@ class LanguageModelProcessor:
                 memory_context = ""
                 if self.memory_core:
                     logger.info(f"LLM Processor: Retrieving memories for query: '{detected_text[:100]}...'")
+
+                    # Get similarity-based relevant memories
                     relevant_memories = self.memory_core.retrieve_memories(
                         query=detected_text,
                         memory_types=["episodic", "semantic", "procedural"]
                     )
-                    if relevant_memories:
-                        memory_context = self.memory_core.format_context_for_llm(relevant_memories)
+
+                    # ALWAYS get active tasks/reminders (proactive)
+                    active_items = self.memory_core.get_active_tasks_and_reminders(max_results=5)
+
+                    # Combine and deduplicate
+                    all_memories = relevant_memories + active_items
+                    seen_texts = set()
+                    deduplicated = []
+                    for mem in all_memories:
+                        text = mem.get('text', '')
+                        if text not in seen_texts:
+                            seen_texts.add(text)
+                            deduplicated.append(mem)
+
+                    if deduplicated:
+                        memory_context = self.memory_core.format_context_for_llm(deduplicated)
                         # Count memory types
                         type_counts = {}
-                        for mem in relevant_memories:
-                            mem_type = mem['memory_type']
+                        for mem in deduplicated:
+                            mem_type = mem.get('memory_type', 'unknown')
                             type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
                         type_summary = ", ".join([f"{count} {mtype}" for mtype, count in type_counts.items()])
-                        logger.success(f"LLM Processor: Retrieved {len(relevant_memories)} memories ({type_summary})")
-                        for i, mem in enumerate(relevant_memories[:3], 1):
-                            logger.info(f"  Memory {i}: [{mem['memory_type']}] similarity={mem['similarity']:.3f} - {mem['text'][:100]}...")
+
+                        if active_items:
+                            logger.success(f"LLM Processor: Retrieved {len(deduplicated)} memories ({type_summary}) including {len(active_items)} active tasks/reminders")
+                        else:
+                            logger.success(f"LLM Processor: Retrieved {len(deduplicated)} memories ({type_summary})")
+
+                        for i, mem in enumerate(deduplicated[:3], 1):
+                            similarity = mem.get('similarity', 0)
+                            logger.info(f"  Memory {i}: [{mem.get('memory_type', 'unknown')}] similarity={similarity:.3f} - {mem.get('text', '')[:100]}...")
                     else:
                         logger.warning(f"LLM Processor: No relevant memories found (threshold={self.memory_core.similarity_threshold})")
 

@@ -299,6 +299,48 @@ class MemoryCore:
             logger.error(f"Memory Core: Failed to retrieve memories: {e}")
             return []
 
+    def get_active_tasks_and_reminders(self, max_results: int = 10) -> list[dict[str, Any]]:
+        """
+        Retrieve active tasks and reminders regardless of query relevance.
+        These should be proactively surfaced to keep the user informed.
+
+        Returns:
+            List of task/reminder memories with status='active'
+        """
+        if not self.enable_memory:
+            return []
+
+        try:
+            import json
+
+            # Get all recent episodic memories
+            all_memories = self.table.search().limit(100).to_list()
+
+            active_items = []
+            for mem in all_memories:
+                # Parse metadata (it's stored as JSON string)
+                metadata = mem.get('metadata', '{}')
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+
+                # Filter for active tasks/reminders
+                semantic_type = metadata.get('semantic_type', '')
+                status = metadata.get('status', '')
+
+                if semantic_type in ['task', 'reminder'] and status == 'active':
+                    mem['parsed_metadata'] = metadata
+                    active_items.append(mem)
+
+            # Return most recent active items
+            return active_items[:max_results]
+
+        except Exception as e:
+            logger.error(f"Memory Core: Failed to retrieve active tasks/reminders: {e}")
+            return []
+
     def get_recent_memories(
         self,
         hours: int = 24,
