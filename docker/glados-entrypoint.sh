@@ -77,7 +77,7 @@ echo "Audio I/O: ${GLADOS_AUDIO_IO_TYPE:-sounddevice}"
 # Execute the command as glados user if we're root
 if [ "$(id -u)" = "0" ]; then
     echo "Dropping privileges to glados user..."
-    exec su-exec glados "$@"
+    exec gosu glados "$@"
 else
     exec "$@"
 fi

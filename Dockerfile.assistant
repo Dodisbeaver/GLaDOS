@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libportaudio2 \
     portaudio19-dev \
     espeak-ng \
-    su-exec \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for dependency management
