@@ -214,13 +214,19 @@ class LanguageModelProcessor:
         try:
             logger.info(f"LLM Processor: Summarizing conversation pair ({total_words} words)")
 
-            # Prompt for conversation summarization
+            # Prompt for conversation summarization with context awareness
             summary_prompt = (
-                "Convert this Q&A into a single factual statement. Extract only the key information. "
-                "Remove sarcasm, jokes, and personality. State facts directly. Maximum 20 words.\n\n"
-                f"Question: {user_text}\n"
-                f"Answer: {assistant_text}\n\n"
-                "Factual summary:"
+                "You are a memory system. Extract ONLY the key fact from this conversation.\n\n"
+                "Rules:\n"
+                "- If user states a PREFERENCE (favorite, like, prefer, hate): Keep the preference relationship\n"
+                "- If user makes a CORRECTION (no, actually, it's): State the corrected fact\n"
+                "- If user sets a REMINDER or TASK (remember, remind me, need to, have to): Keep the action/event\n"
+                "- If user shares INFORMATION (schedule, facts, names): Keep the core information\n"
+                "- Remove ALL sarcasm, jokes, filler words, politeness\n"
+                "- Maximum 15 words\n\n"
+                f"User: {user_text}\n"
+                f"Assistant: {assistant_text}\n\n"
+                "Memory to store:"
             )
 
             data = {
