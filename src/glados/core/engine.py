@@ -96,6 +96,9 @@ class GladosConfig(BaseModel):
     memory_similarity_threshold: float = 0.7
     memory_store_assistant_responses: bool = True
     memory_store_user_inputs: bool = True
+    memory_summarize_responses: bool = False  # Use small LLM to extract key facts before storing
+    memory_summarizer_url: str | None = None  # URL for summarization LLM (e.g., http://localhost:11434/api/generate)
+    memory_summarizer_model: str = "gemma3:1b"  # Small, fast model for summarization
     memory_gemma_prompt_name: str | None = None
     memory_gemma_truncate_dim: int | None = None
     memory_ollama_url: str | None = None
@@ -160,13 +163,16 @@ class GladosConfig(BaseModel):
             "GLADOS_MEMORY_OLLAMA_URL": "memory_ollama_url",
             "GLADOS_MEMORY_OLLAMA_AUTO_PULL": "memory_ollama_auto_pull",
             "GLADOS_MEMORY_OLLAMA_MAX_RETRIES": "memory_ollama_max_retries",
+            "GLADOS_MEMORY_SUMMARIZE_RESPONSES": "memory_summarize_responses",
+            "GLADOS_MEMORY_SUMMARIZER_URL": "memory_summarizer_url",
+            "GLADOS_MEMORY_SUMMARIZER_MODEL": "memory_summarizer_model",
         }
 
         for env_var, config_key in env_overrides.items():
             env_value = os.getenv(env_var)
             if env_value is not None:
                 # Handle boolean conversion
-                if config_key in ("interruptible", "memory_enabled", "memory_auto_select_provider", "memory_ollama_auto_pull"):
+                if config_key in ("interruptible", "memory_enabled", "memory_auto_select_provider", "memory_ollama_auto_pull", "memory_summarize_responses"):
                     config[config_key] = env_value.lower() in ("true", "1", "yes", "on")
                 # Handle integer conversion
                 elif config_key in ("asr_pause_limit", "memory_max_retrievals", "memory_gemma_truncate_dim", "memory_ollama_max_retries"):
@@ -351,6 +357,9 @@ class Glados:
             memory_core=self.memory_core,
             store_user_inputs=memory_config.get("store_user_inputs", True) if memory_config else True,
             store_assistant_responses=memory_config.get("store_assistant_responses", True) if memory_config else True,
+            summarize_responses=memory_config.get("summarize_responses", False) if memory_config else False,
+            summarizer_url=memory_config.get("summarizer_url") if memory_config else None,
+            summarizer_model=memory_config.get("summarizer_model", "gemma:2b") if memory_config else "gemma:2b",
         )
 
         self.tts_synthesizer = TextToSpeechSynthesizer(
@@ -448,6 +457,9 @@ class Glados:
             "similarity_threshold": config.memory_similarity_threshold,
             "store_user_inputs": config.memory_store_user_inputs,
             "store_assistant_responses": config.memory_store_assistant_responses,
+            "summarize_responses": config.memory_summarize_responses,
+            "summarizer_url": config.memory_summarizer_url,
+            "summarizer_model": config.memory_summarizer_model,
             # EmbeddingGemma-specific settings
             "prompt_name": config.memory_gemma_prompt_name,
             "truncate_dim": config.memory_gemma_truncate_dim,
