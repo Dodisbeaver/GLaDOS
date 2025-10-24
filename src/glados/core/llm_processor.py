@@ -57,6 +57,9 @@ class LanguageModelProcessor:
         self.summarizer_url = summarizer_url or str(completion_url)  # Use main LLM URL if not specified
         self.summarizer_model = summarizer_model
 
+        # Track current user input for conversation pair storage
+        self._current_user_input = None
+
         self.prompt_headers = {"Content-Type": "application/json"}
 
         # State for filtering chain-of-thought tags
@@ -188,52 +191,53 @@ class LanguageModelProcessor:
             logger.info(f"LLM Processor: Sending to TTS queue: '{sentence}'")
             self.tts_input_queue.put(sentence)
 
-    def _summarize_for_memory(self, response_text: str) -> str:
+    def _summarize_conversation_pair(self, user_text: str, assistant_text: str) -> str:
         """
-        Summarize assistant response into key facts for memory storage.
-        Uses a small, fast LLM (gemma3:1b) to extract only relevant information.
+        Summarize a user question + assistant answer pair into a single factual memory.
+        Uses a small, fast LLM (gemma3:1b) to extract key information.
 
         Args:
-            response_text: Full assistant response
+            user_text: User's question or input
+            assistant_text: Assistant's response
 
         Returns:
-            Summarized text containing only key facts, or original if summarization fails
+            Summarized conversation as a factual statement
         """
-        if not self.summarize_responses or not response_text.strip():
-            return response_text
+        if not self.summarize_responses:
+            return f"Q: {user_text}\nA: {assistant_text}"
 
-        # If response is already short, don't summarize
-        if len(response_text.split()) <= 20:
-            return response_text
+        # If both are very short, store as-is
+        total_words = len(user_text.split()) + len(assistant_text.split())
+        if total_words <= 15:
+            return f"Q: {user_text} A: {assistant_text}"
 
         try:
-            logger.debug(f"LLM Processor: Summarizing response for memory storage")
+            logger.info(f"LLM Processor: Summarizing conversation pair ({total_words} words)")
 
-            # Prompt for fact extraction
+            # Prompt for conversation summarization
             summary_prompt = (
-                "Extract ONLY the key factual information from this response as a single concise sentence. "
-                "Remove sarcasm, jokes, filler words, and redundancy. If answering a question, state just the answer. "
-                "Maximum 20 words.\n\n"
-                f"Response: {response_text}\n\n"
-                "Key facts:"
+                "Convert this Q&A into a single factual statement. Extract only the key information. "
+                "Remove sarcasm, jokes, and personality. State facts directly. Maximum 20 words.\n\n"
+                f"Question: {user_text}\n"
+                f"Answer: {assistant_text}\n\n"
+                "Factual summary:"
             )
 
             data = {
                 "model": self.summarizer_model,
                 "prompt": summary_prompt,
-                "stream": False,  # Non-streaming for quick response
+                "stream": False,
                 "options": {
-                    "temperature": 0.1,  # Low temperature for factual extraction
-                    "num_predict": 50,   # Limit tokens for speed
+                    "temperature": 0.1,
+                    "num_predict": 50,
                 }
             }
 
-            # Call summarizer LLM (typically Ollama)
             response = requests.post(
                 self.summarizer_url,
                 headers={"Content-Type": "application/json"},
                 json=data,
-                timeout=5  # Fast timeout - summarization should be quick
+                timeout=5
             )
             response.raise_for_status()
 
@@ -241,15 +245,15 @@ class LanguageModelProcessor:
             summarized = result.get("response", "").strip()
 
             if summarized and len(summarized) > 10:
-                logger.debug(f"LLM Processor: Summarized '{response_text[:50]}...' -> '{summarized}'")
+                logger.success(f"LLM Processor: Conversation summarized to: '{summarized}'")
                 return summarized
             else:
-                logger.warning("LLM Processor: Summarization returned empty, using original")
-                return response_text
+                logger.warning("LLM Processor: Summarization returned empty, using Q&A format")
+                return f"Q: {user_text} A: {assistant_text}"
 
         except Exception as e:
-            logger.warning(f"LLM Processor: Summarization failed: {e}, using original response")
-            return response_text
+            logger.warning(f"LLM Processor: Conversation summarization failed: {e}, using Q&A format")
+            return f"Q: {user_text} A: {assistant_text}"
 
     def run(self) -> None:
         """
@@ -288,6 +292,9 @@ class LanguageModelProcessor:
 
                 self.conversation_history.append({"role": "user", "content": detected_text})
 
+                # Store current user input for conversation pair summarization later
+                self._current_user_input = detected_text
+
                 # Retrieve relevant memories for context BEFORE storing the new input
                 # This prevents the just-stored message from being the top hit
                 memory_context = ""
@@ -311,13 +318,8 @@ class LanguageModelProcessor:
                     else:
                         logger.warning(f"LLM Processor: No relevant memories found (threshold={self.memory_core.similarity_threshold})")
 
-                # Store user input in memory if enabled (after retrieval)
-                if self.memory_core and self.store_user_inputs:
-                    self.memory_core.store_memory(
-                        text=detected_text,
-                        memory_type="episodic",
-                        speaker="user"
-                    )
+                # Note: User input is NOT stored separately anymore
+                # Instead, we store conversation pairs (user + assistant) after the response
 
                 # Reset think tag filter state for new request
                 self._reset_think_filter_state()
@@ -396,16 +398,25 @@ class LanguageModelProcessor:
                                 self.conversation_history.append({"role": "assistant", "content": full_response})
                                 logger.debug(f"LLM Processor: Added assistant response to history: '{full_response[:100]}...'")
 
-                                # Store assistant response in memory if enabled
-                                if self.memory_core and self.store_assistant_responses:
-                                    # Summarize response to extract key facts (if enabled)
-                                    text_to_store = self._summarize_for_memory(full_response)
+                                # Store conversation pair (user + assistant) in memory if enabled
+                                if self.memory_core and (self.store_user_inputs or self.store_assistant_responses):
+                                    if hasattr(self, '_current_user_input') and self._current_user_input:
+                                        # Summarize the Q&A pair into a single factual memory
+                                        text_to_store = self._summarize_conversation_pair(
+                                            self._current_user_input,
+                                            full_response
+                                        )
 
-                                    self.memory_core.store_memory(
-                                        text=text_to_store,
-                                        memory_type="episodic",
-                                        speaker="assistant"
-                                    )
+                                        logger.info(f"LLM Processor: Storing conversation pair in memory: '{text_to_store[:80]}...'")
+                                        self.memory_core.store_memory(
+                                            text=text_to_store,
+                                            memory_type="episodic",
+                                            speaker="conversation"  # New speaker type for Q&A pairs
+                                        )
+                                        logger.success("LLM Processor: Conversation pair stored in memory")
+
+                                        # Clear the current user input
+                                        self._current_user_input = None
                             else:
                                 logger.debug("LLM Processor: Empty assistant response, not adding to history")
                         elif assistant_response_buffer and not self.processing_active_event.is_set():
