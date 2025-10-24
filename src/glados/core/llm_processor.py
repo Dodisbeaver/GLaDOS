@@ -463,8 +463,10 @@ class LanguageModelProcessor:
                                 self.conversation_history.append({"role": "assistant", "content": full_response})
                                 logger.debug(f"LLM Processor: Added assistant response to history: '{full_response[:100]}...'")
 
-                                # Store conversation pair (user + assistant) in memory if enabled
-                                if self.memory_core and (self.store_user_inputs or self.store_assistant_responses):
+                                # Store conversation pair (user + assistant) in memory if BOTH enabled
+                                # Since the pair contains both user input AND assistant response,
+                                # both flags must be true to respect privacy settings
+                                if self.memory_core and self.store_user_inputs and self.store_assistant_responses:
                                     if hasattr(self, '_current_user_input') and self._current_user_input:
                                         # Summarize the Q&A pair and detect semantic type
                                         text_to_store, memory_metadata = self._summarize_conversation_pair(
