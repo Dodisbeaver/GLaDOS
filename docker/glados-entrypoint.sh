@@ -5,18 +5,6 @@ set -e
 
 echo "Starting GLaDOS container..."
 
-# Fix permissions for mounted volumes if running as root
-# (This handles the case where host is root and container user is non-root)
-if [ "$(id -u)" = "0" ]; then
-    echo "Running as root, fixing volume permissions..."
-    chown -R glados:glados /app/models /app/data 2>/dev/null || true
-    echo "Permissions fixed, will drop to glados user after setup"
-elif [ ! -w "/app/models" ]; then
-    echo "WARNING: /app/models is not writable by current user"
-    echo "You may need to fix permissions on the host with:"
-    echo "  chown -R 1000:1000 ./models ./data"
-fi
-
 # Check if models directory is populated
 if [ ! -f "${GLADOS_MODELS_PATH}/ASR/silero_vad_v5.onnx" ]; then
     echo "Downloading GLaDOS models..."
@@ -74,10 +62,5 @@ echo "Starting GLaDOS with config: ${GLADOS_CONFIG_PATH}"
 echo "Ollama URL: ${OLLAMA_BASE_URL}"
 echo "Audio I/O: ${GLADOS_AUDIO_IO_TYPE:-sounddevice}"
 
-# Execute the command as glados user if we're root
-if [ "$(id -u)" = "0" ]; then
-    echo "Dropping privileges to glados user..."
-    exec gosu glados "$@"
-else
-    exec "$@"
-fi
+# Execute the command
+exec "$@"

@@ -16,7 +16,6 @@ services:
       dockerfile: Dockerfile.assistant
       args:
         RUNTIME: ${GLADOS_RUNTIME:-cpu}  # cpu or cuda
-    user: "0:0"  # Run as root to fix volume permissions, entrypoint drops to glados user
     volumes:
       - glados-models:/app/models
       - ./data/memory:/app/data/memory          # Host directory for persistent vector DB
