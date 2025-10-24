@@ -191,46 +191,83 @@ class LanguageModelProcessor:
             logger.info(f"LLM Processor: Sending to TTS queue: '{sentence}'")
             self.tts_input_queue.put(sentence)
 
-    def _summarize_conversation_pair(self, user_text: str, assistant_text: str) -> str:
+    def _detect_semantic_type_simple(self, user_text: str) -> dict:
+        """
+        Simple pattern matching to detect semantic type for short exchanges.
+
+        Args:
+            user_text: User's input text
+
+        Returns:
+            Metadata dict with semantic_type, priority, status
+        """
+        text_lower = user_text.lower()
+
+        # TASK detection
+        if any(word in text_lower for word in ["task", "todo", "need to do", "have to", "must do"]):
+            return {"semantic_type": "task", "priority": "normal", "status": "active"}
+
+        # REMINDER detection
+        if any(word in text_lower for word in ["remind me", "reminder", "don't forget", "remember to"]):
+            return {"semantic_type": "reminder", "priority": "high", "status": "active"}
+
+        # PREFERENCE detection
+        if any(word in text_lower for word in ["favorite", "prefer", "like", "hate", "love", "dislike"]):
+            return {"semantic_type": "preference", "priority": "normal", "status": "active"}
+
+        # Default to FACT
+        return {"semantic_type": "fact", "priority": "normal", "status": "active"}
+
+    def _summarize_conversation_pair(self, user_text: str, assistant_text: str) -> tuple[str, dict]:
         """
         Summarize a user question + assistant answer pair into a single factual memory.
-        Uses a small, fast LLM (gemma3:1b) to extract key information.
+        Uses a small, fast LLM to extract key information and classify the semantic type.
 
         Args:
             user_text: User's question or input
             assistant_text: Assistant's response
 
         Returns:
-            Summarized conversation as a factual statement
+            Tuple of (summarized_text, metadata_dict)
+            metadata includes: semantic_type, priority, status
         """
-        if not self.summarize_responses:
-            return f"Q: {user_text}\nA: {assistant_text}"
+        # Default metadata
+        default_metadata = {
+            "semantic_type": "fact",
+            "priority": "normal",
+            "status": "active"
+        }
 
-        # If both are very short, store as-is
+        if not self.summarize_responses:
+            return f"Q: {user_text}\nA: {assistant_text}", default_metadata
+
+        # If both are very short, store as-is with basic detection
         total_words = len(user_text.split()) + len(assistant_text.split())
         if total_words <= 15:
-            return f"Q: {user_text} A: {assistant_text}"
+            # Simple pattern matching for short exchanges
+            text = f"Q: {user_text} A: {assistant_text}"
+            metadata = self._detect_semantic_type_simple(user_text)
+            return text, metadata
 
         try:
             logger.info(f"LLM Processor: Summarizing conversation pair ({total_words} words)")
 
-            # Prompt for conversation summarization with context awareness
+            # Prompt for conversation summarization with semantic type classification
             summary_prompt = (
-                "You are a memory system. Extract the core FACTUAL information from this exchange.\n\n"
-                "What to extract:\n"
-                "- User PREFERENCES: favorite/like/prefer/hate something\n"
-                "- User LOCATION: where user is/lives/works\n"
-                "- User SCHEDULE: appointments/events/times\n"
-                "- User REMINDERS: tasks to remember\n"
-                "- Assistant ANSWERS: factual information given in response to user's question\n\n"
+                "You are a memory system. Extract the core fact AND classify its type.\n\n"
+                "Types:\n"
+                "- TASK: User needs to do something (todo, have to, need to, must do)\n"
+                "- REMINDER: User wants to remember something (remind me, don't forget)\n"
+                "- PREFERENCE: User's likes/dislikes (favorite, prefer, like, hate, love)\n"
+                "- FACT: General information (default)\n\n"
                 "What to ignore:\n"
                 "- Sarcasm, jokes, humor, personality quirks\n"
-                "- Filler words, politeness, conversational fluff\n"
-                "- Rhetorical questions or commentary\n\n"
-                "Output format: Direct factual statement, third person. Maximum 12 words.\n\n"
+                "- Filler words, politeness, conversational fluff\n\n"
                 f"User: {user_text}\n"
                 f"Assistant: {assistant_text}\n\n"
-                "Core fact:"
+                "Output format (two lines):\n"
+                "TYPE: [task|reminder|preference|fact]\n"
+                "FACT: [factual statement, max 12 words]"
             )
 
             data = {
@@ -252,18 +289,35 @@ class LanguageModelProcessor:
             response.raise_for_status()
 
             result = response.json()
-            summarized = result.get("response", "").strip()
+            llm_output = result.get("response", "").strip()
 
-            if summarized and len(summarized) > 10:
-                logger.success(f"LLM Processor: Conversation summarized to: '{summarized}'")
-                return summarized
+            if llm_output and len(llm_output) > 10:
+                # Parse TYPE and FACT from output
+                metadata = default_metadata.copy()
+                summarized = llm_output
+
+                # Try to parse structured output
+                lines = llm_output.split('\n')
+                if len(lines) >= 2:
+                    for line in lines:
+                        if line.startswith("TYPE:"):
+                            type_str = line.replace("TYPE:", "").strip().lower()
+                            if type_str in ["task", "reminder", "preference", "fact"]:
+                                metadata["semantic_type"] = type_str
+                                if type_str == "reminder":
+                                    metadata["priority"] = "high"
+                        elif line.startswith("FACT:"):
+                            summarized = line.replace("FACT:", "").strip()
+
+                logger.success(f"LLM Processor: Conversation summarized to [{metadata['semantic_type']}]: '{summarized}'")
+                return summarized, metadata
             else:
                 logger.warning("LLM Processor: Summarization returned empty, using Q&A format")
-                return f"Q: {user_text} A: {assistant_text}"
+                return f"Q: {user_text} A: {assistant_text}", default_metadata
 
         except Exception as e:
             logger.warning(f"LLM Processor: Conversation summarization failed: {e}, using Q&A format")
-            return f"Q: {user_text} A: {assistant_text}"
+            return f"Q: {user_text} A: {assistant_text}", default_metadata
 
     def run(self) -> None:
         """
@@ -411,8 +465,8 @@ class LanguageModelProcessor:
                                 # Store conversation pair (user + assistant) in memory if enabled
                                 if self.memory_core and (self.store_user_inputs or self.store_assistant_responses):
                                     if hasattr(self, '_current_user_input') and self._current_user_input:
-                                        # Summarize the Q&A pair into a single factual memory
-                                        text_to_store = self._summarize_conversation_pair(
+                                        # Summarize the Q&A pair and detect semantic type
+                                        text_to_store, memory_metadata = self._summarize_conversation_pair(
                                             self._current_user_input,
                                             full_response
                                         )
@@ -421,9 +475,10 @@ class LanguageModelProcessor:
                                         self.memory_core.store_memory(
                                             text=text_to_store,
                                             memory_type="episodic",
-                                            speaker="conversation"  # New speaker type for Q&A pairs
+                                            speaker="conversation",  # New speaker type for Q&A pairs
+                                            metadata=memory_metadata  # Include semantic type, priority, status
                                         )
-                                        logger.success("LLM Processor: Conversation pair stored in memory")
+                                        logger.success(f"LLM Processor: Conversation pair stored as [{memory_metadata['semantic_type']}]")
 
                                         # Clear the current user input
                                         self._current_user_input = None
