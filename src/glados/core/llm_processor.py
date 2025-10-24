@@ -230,7 +230,13 @@ class LanguageModelProcessor:
                     )
                     if relevant_memories:
                         memory_context = self.memory_core.format_context_for_llm(relevant_memories)
-                        logger.success(f"LLM Processor: Retrieved {len(relevant_memories)} relevant memories")
+                        # Count memory types
+                        type_counts = {}
+                        for mem in relevant_memories:
+                            mem_type = mem['memory_type']
+                            type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
+                        type_summary = ", ".join([f"{count} {mtype}" for mtype, count in type_counts.items()])
+                        logger.success(f"LLM Processor: Retrieved {len(relevant_memories)} memories ({type_summary})")
                         for i, mem in enumerate(relevant_memories[:3], 1):
                             logger.info(f"  Memory {i}: [{mem['memory_type']}] similarity={mem['similarity']:.3f} - {mem['text'][:100]}...")
                     else:
