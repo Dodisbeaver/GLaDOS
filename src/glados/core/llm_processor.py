@@ -216,17 +216,21 @@ class LanguageModelProcessor:
 
             # Prompt for conversation summarization with context awareness
             summary_prompt = (
-                "You are a memory system. Extract ONLY the key fact from this conversation.\n\n"
-                "Rules:\n"
-                "- If user states a PREFERENCE (favorite, like, prefer, hate): Keep the preference relationship\n"
-                "- If user makes a CORRECTION (no, actually, it's): State the corrected fact\n"
-                "- If user sets a REMINDER or TASK (remember, remind me, need to, have to): Keep the action/event\n"
-                "- If user shares INFORMATION (schedule, facts, names): Keep the core information\n"
-                "- Remove ALL sarcasm, jokes, filler words, politeness\n"
-                "- Maximum 15 words\n\n"
+                "You are a memory system. Extract the core FACTUAL information from this exchange.\n\n"
+                "What to extract:\n"
+                "- User PREFERENCES: favorite/like/prefer/hate something\n"
+                "- User LOCATION: where user is/lives/works\n"
+                "- User SCHEDULE: appointments/events/times\n"
+                "- User REMINDERS: tasks to remember\n"
+                "- Assistant ANSWERS: factual information given in response to user's question\n\n"
+                "What to ignore:\n"
+                "- Sarcasm, jokes, humor, personality quirks\n"
+                "- Filler words, politeness, conversational fluff\n"
+                "- Rhetorical questions or commentary\n\n"
+                "Output format: Direct factual statement, third person. Maximum 12 words.\n\n"
                 f"User: {user_text}\n"
                 f"Assistant: {assistant_text}\n\n"
-                "Memory to store:"
+                "Core fact:"
             )
 
             data = {
